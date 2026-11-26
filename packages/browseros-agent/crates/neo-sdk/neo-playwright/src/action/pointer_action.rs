@@ -545,7 +545,7 @@ impl<'a> PointerRunner<'a> {
     /// Pins the locator's element for `check`, which reads it before it clicks it.
     async fn pin(&mut self, located: &Resolved) -> Result<Option<Pin>, PlaywrightError> {
         let request = ProbeRequest::Resolve {
-            target: self.subject.first_target(),
+            target: Subject::first_target(located),
             strictness: self.strictness,
             want: Want::Element,
         };
@@ -650,7 +650,7 @@ impl<'a> PointerRunner<'a> {
             } else {
                 ScrollPlan::None
             };
-            let target = pin.map_or_else(|| self.subject.first_target(), ProbeTarget::Pin);
+            let target = pin.map_or_else(|| Subject::first_target(located), ProbeTarget::Pin);
             // The protocol's scroll needs the pinned node and, like the probe's own scrolls,
             // follows the state checks: this request resolves and checks, and
             // `protocol_scrolled` below scrolls and measures.

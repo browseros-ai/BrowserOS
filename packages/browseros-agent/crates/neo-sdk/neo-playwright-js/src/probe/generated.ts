@@ -59,7 +59,14 @@ frameVisible: boolean,
 /**
  * Where the page side leaves the page before its checks (ruling R62).
  */
-scroll: LookScroll, };
+scroll: LookScroll, 
+/**
+ * The box's accessible name as a capture of the tab names it, which the field's own drawing
+ * over the box is compared with (rulings R55, R56). The page has no name computation of its
+ * own, so Rust reads it from the tree after it resolved the box; absent when the tree has no
+ * node for the box, and then the page side reads the box's own label.
+ */
+name?: string, };
 
 /**
  * What the host approved about a box. The look refuses the box when a fact the host sent no
@@ -163,13 +170,18 @@ export type BoxState = "holds" | "other" | "left";
 export type Checkable = { checked: boolean, radio: boolean, };
 
 /**
- * One control of a cover that takes the pointer.
+ * One control of a layer that takes the pointer, as the page worded it in the engine snapshot's
+ * survey (`SurveyLayer`), a reply only the `snapshot` request sends.
  */
 export type CoverControl = { role: string, name: string, ref: string, };
 
 /**
  * What a covered pointer action says about its cover (covered-click spec section 2), read in
- * the world that saw it. Its text comes from the snapshot's own reads, under the mask (R47).
+ * the world that saw it. The page finds the cover and decides every fact here from the live
+ * page. It pins the elements the answer names and leaves naming them to Rust, which reads their
+ * role, name and ref from a capture taken after this reply (design 8.2; `action/cover.rs`
+ * `covered_answer`), as the snapshot's `# on top:` lines are named. Its text is read under the
+ * mask (R47).
  */
 export type CoverFacts = { 
 /**
@@ -180,39 +192,40 @@ export type CoverFacts = {
 layer: number, 
 /**
  * The cover, "which dialog": walking up from what is on top, the first dialog-like role,
- * else the first section role, else the root of its subtree. The ref the snapshot printed
- * for it, else one minted for it (`RefMap.forElement`), which `getByRef` resolves.
+ * else the first section role, else the root of its subtree. The tree names it and prints
+ * its block. Its ref is the one a snapshot printed for it, else one minted for it, which
+ * `getByRef` resolves. Every pin of the reply is in one entry, so none is evicted before
+ * Rust has keyed them all.
  */
-ref: string, role: string, name: string, 
+pin: Pin, 
 /**
  * Upstream's markup line for it, as today's `intercepts pointer events` line prints.
  */
 markup: string, 
 /**
- * Its own snapshot (`ariaSnapshotJSON` in `default` mode, which mints no ref and moves
- * nothing the agent's own snapshots depend on), which Rust prints as the covered block
- * where it writes the error's cover (action/cover.rs). `null` for a cover that holds the
- * control: its snapshot would be the page's.
- */
-snapshot: unknown, 
-/**
- * Only when that snapshot holds no words: what the cover draws as text, cut at 300
- * characters. The engine drops a `role=textbox` div's own text, so such a cover prints as
- * a nameless textbox, and its words are here.
+ * What the cover draws as text, cut at 300 characters; absent when it draws none or holds
+ * the control. Rust prints it only when the cover's block holds no words: the tree prints a
+ * `role=textbox` div without its own text, so such a cover's words are here.
  */
 text?: string, 
 /**
- * Up to eight of its controls that take the pointer, a dialog's buttons kept.
+ * Up to eight of its controls that take the pointer, a dialog's buttons kept, in order.
  */
-controls: Array<CoverControl>, 
+controls: Array<Pin>, 
 /**
- * The cover holds no control and draws no text.
+ * The cover holds the control (its wrapper, its label, the page's root): its block would be
+ * the page's, so the answer prints none.
+ */
+surrounds: boolean, 
+/**
+ * The cover holds no control and draws no words: no text, and no `aria-label`, `title` or
+ * `alt` on it or in it.
  */
 blank: boolean, 
 /**
- * The cover is a blank layer, and the ref, role, name, snapshot and controls are those of
- * the dialog open over it, nearest the point; `markup` stays the layer's. The point lies
- * under the layer: the dialog is not what takes the click.
+ * The cover is a blank layer, and the pin and controls are those of the dialog open over it,
+ * nearest the point; `markup` stays the layer's. The point lies under the layer: the dialog
+ * is not what takes the click.
  */
 behind: boolean, 
 /**
@@ -229,7 +242,7 @@ notice: boolean, kind: CoverKind, };
 /**
  * How the cover stands to the control, which picks the answer's line (spec section 2's table).
  */
-export type CoverKind = { "is": "page" } | { "is": "frame", inside?: boolean, } | { "is": "partial", position: Point, } | { "is": "label", links: number, position?: Point, } | { "is": "wrapper" } | { "is": "labels", ref: string, } | { "is": "nothing" } | { "is": "folded" };
+export type CoverKind = { "is": "page" } | { "is": "frame", inside?: boolean, } | { "is": "partial", position: Point, } | { "is": "label", links: number, position?: Point, } | { "is": "wrapper" } | { "is": "labels", pin: Pin, } | { "is": "nothing" } | { "is": "folded" };
 
 /**
  * Which cover stood at one check of a pointer action (covered-click spec section 1): the root
@@ -547,7 +560,7 @@ export type ProbeReply = { "kind": "described", protocol: number, seq: FrameSeq,
  * Only from a boot that replaced the world's numbering: the seq it held before. Under
  * another epoch that is a seq an earlier `Playwright` printed refs under.
  */
-retired?: FrameSeq, } | { "kind": "none", staleRef?: string, } | { "kind": "strict", message: string, } | { "kind": "element", pin: Pin, preview: string, resolved?: Resolution, } | { "kind": "frame", pin: Pin, key: string, visible: boolean, src: string, } | { "kind": "notFrame", preview: string, } | { "kind": "detached" } | { "kind": "state", missing: ElementState, resolved?: Resolution, } | { "kind": "measured", pin: Pin, rect: Rect, point: Point, inView: boolean, transformed: boolean, 
+retired?: FrameSeq, } | { "kind": "none", staleRef?: string, } | { "kind": "strict", message: string, listing?: StrictListing, } | { "kind": "element", pin: Pin, preview: string, resolved?: Resolution, } | { "kind": "frame", pin: Pin, key: string, visible: boolean, src: string, } | { "kind": "notFrame", preview: string, } | { "kind": "detached" } | { "kind": "state", missing: ElementState, resolved?: Resolution, } | { "kind": "measured", pin: Pin, rect: Rect, point: Point, inView: boolean, transformed: boolean, 
 /**
  * The original element's border width plus explicit position, not a retarget's rect.
  */
@@ -645,12 +658,12 @@ closedRoots?: number, } | { "op": "expect", target: ProbeTarget, strictness: Str
  * The whole chunk as the prelude sent it, when this stage ends a strict locator: the
  * violation's message is upstream's `strictModeViolationError` for it.
  */
-strict?: ParsedSelector, } | { "op": "describePins", members: Array<SetMember>, chunk?: ParsedSelector, } | { "op": "coverSurvey" } | { "op": "privateMarks" };
+strict?: ParsedSelector, } | { "op": "describePins", members: Array<SetMember>, chunk?: ParsedSelector, } | { "op": "coverSurvey" } | { "op": "privateMarks" } | { "op": "openClosedRoots" };
 
 /**
  * What a request runs on inside the world.
  */
-export type ProbeTarget = { "chunk": ParsedSelector } | { "pin": Pin } | "document" | "root";
+export type ProbeTarget = { "chunk": ParsedSelector } | { "pin": Pin } | "document" | "root" | { "set": ResolvedSet };
 
 /**
  * A state `read` checks, as `injected.elementState` names it.
@@ -660,7 +673,7 @@ export type QueryState = "visible" | "hidden" | "enabled" | "disabled" | "editab
 /**
  * What a `read` reads from its element.
  */
-export type Read = { "kind": "textContent" } | { "kind": "innerText" } | { "kind": "innerHtml" } | { "kind": "inputValue" } | { "kind": "ref" } | { "kind": "boundingBox" } | { "kind": "viewCentre" } | { "kind": "attribute", name: string, } | { "kind": "state", state: QueryState, } | { "kind": "frameOrigin" } | { "kind": "located" } | { "kind": "checkable" } | { "kind": "fileInput", multiple: boolean, directory: boolean, };
+export type Read = { "kind": "textContent" } | { "kind": "innerText" } | { "kind": "innerHtml" } | { "kind": "inputValue" } | { "kind": "ref" } | { "kind": "boundingBox" } | { "kind": "viewCentre" } | { "kind": "attribute", name: string, } | { "kind": "state", state: QueryState, } | { "kind": "frameOrigin" } | { "kind": "located" } | { "kind": "checkable" } | { "kind": "validityInvalid" } | { "kind": "fileInput", multiple: boolean, directory: boolean, };
 
 /**
  * What a `readAll` reads from every match.
@@ -677,6 +690,12 @@ export type Rect = { x: number, y: number, width: number, height: number, };
  * matched. Only a reply to a request that targets a chunk carries one.
  */
 export type Resolution = { preview: string, count: number, };
+
+/**
+ * [`ProbeTarget::Set`]'s chunk, resolved: its matches in order, each pinned in this world (or
+ * the Document, which `nth` or `internal:or` can keep), and the first stale ref it reported.
+ */
+export type ResolvedSet = { members: Array<SetMember>, staleRef?: string, };
 
 /**
  * Upstream's retarget behaviors (`InjectedScript.retarget`).
@@ -760,6 +779,13 @@ export type StorageKind = "local" | "session";
  * The probe's storage results: item lists, a string, or null, without a wrapper object.
  */
 export type StorageValue = Array<StorageItem> | string | null;
+
+/**
+ * What a strict-mode violation the page decided was written from (`strictModeViolationError`):
+ * the chunk's locator text, how many elements matched, and the first ten of them pinned with
+ * their lines, in order.
+ */
+export type StrictListing = { locator: string, count: number, pins: Array<Pin>, items: Array<PinPreview>, };
 
 /**
  * Whether a resolution that matches several elements fails. The probe protocol carries it

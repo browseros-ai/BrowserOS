@@ -7,25 +7,30 @@
  *               `expectHitTarget` finds it (injectedScript.ts), its number in this world, its
  *               box, how opaque it shows, and whether it says it is loading.
  *   cover       once, when an action ends covered: hit-tests the point again and, while the same
- *               cover is on top, answers its facts. Which dialog it is, its ref, role, name and
- *               markup, its own ai snapshot, the controls it shows, and how it stands to the
- *               control (the kind that picks the answer's line, in Rust).
+ *               cover is on top, answers its facts. Which dialog it is, its markup and what it
+ *               draws, the controls it shows, and how it stands to the control (the kind that
+ *               picks the answer's line, in Rust).
+ *
+ * The page finds; Rust names (apc-engine-design 8.2). This world has no ARIA engine: every
+ * decision here reads the live page, roles through the stand-in's pure-DOM `computeAriaRole`
+ * (stubs/roleUtils.ts, held against the vendored engine by its differential test) and words
+ * through the page's own text and labelling attributes. What an answer prints (the cover's ref,
+ * role, name and block, each control's, the control a label is for) comes back as pins, which
+ * Rust names from a capture of the tab's tree, so every ref it prints is one a snapshot prints.
  *
  * Every text read runs under the request's `FailureOutput.tree`, so a privately typed box in the
- * cover prints as the mask prints it (R47). Nothing here sends an event or changes the page; the
- * one write is the engine's own ref expando that an ai snapshot leaves, as every snapshot does.
+ * cover prints as the mask prints it (R47). Nothing here sends an event or changes the page.
  *
  * The helpers below (`hitChain`, `coverRoot`, `whichDialog`, `dialogBehind`, `kindOf`,
- * `takingControls`, `controlsOf`) are exported for sibling files of this folder only, such as a
- * survey of the covers over a page's controls: one rule for "what covers it" and "what is its
+ * `takingControls`, `listedControls`) are exported for sibling files of this folder only, such as
+ * a survey of the covers over a page's controls: one rule for "what covers it" and "what is its
  * own", and no second hit test anywhere. They are never part of the probe's protocol.
  */
-import { type CoverAria, coverAriaFor } from './cover-aria'
+import { computeAriaRole } from '../stubs/roleUtils'
 import type { FailureOutput } from './failure-output'
 import { SECTION_ROLES } from './pointer-targets'
-import { CONTROLS, drawingOf, renderedText } from './private-look'
+import { CONTROLS, drawingOf, labelOf, renderedText } from './private-look'
 import type {
-  CoverControl,
   CoverFacts,
   CoverKind,
   CoverMark,
@@ -38,6 +43,15 @@ import type {
 import { resolveTarget } from './resolve'
 import { mayCarryRoot } from './shadow-roots'
 import type { World } from './world'
+
+/**
+ * How the cover stands to the control, as the page decides it: `CoverKind` with the control on
+ * top as an element where a `labels` cover names it. Only the `cover` request's answer pins it;
+ * an arm or a survey reads the kind and names nothing.
+ */
+export type PageKind =
+  | Exclude<CoverKind, { is: 'labels' }>
+  | { is: 'labels'; control: Element }
 
 /** The roles that answer "which dialog", before the section roles. */
 const DIALOG_ROLES: ReadonlySet<string> = new Set([
@@ -208,7 +222,6 @@ export function cover(
   root: Node | undefined,
   _nodes: readonly unknown[],
   output: FailureOutput,
-  aria: CoverAria = coverAriaFor(world),
 ): ReplyTo<'cover'> {
   const found = resolveTarget(world, request.target, 'firstMatch', root)
   if (found.kind !== 'one') return found
@@ -225,7 +238,7 @@ export function cover(
   if (coverNumber(top) !== request.cover) return { kind: 'cover', facts: null }
   return {
     kind: 'cover',
-    facts: factsOf(world, output, subject, chain, top, request, aria),
+    facts: factsOf(world, output, subject, chain, top, request),
   }
 }
 
@@ -236,59 +249,54 @@ function factsOf(
   chain: readonly Element[],
   top: Element,
   request: CoverRequest,
-  aria: CoverAria,
 ): CoverFacts {
-  const kind = kindOf(world, subject, chain, request.point, request.above, aria)
-  const layer = whichDialog(world, chain, top, request.point, aria)
+  const kind = kindOf(subject, chain, request.point, request.above)
+  const layer = whichDialog(chain, top, request.point)
   const { shown, behind, closed } = shownLayer(
     world,
     output,
     layer,
     request.point,
     subject,
-    aria,
   )
   // A cover that holds the control (its wrapper, its label, the page's root) is the control's
-  // own surroundings: its snapshot would be the page, so it is left out.
+  // own surroundings: its block would be the page, so Rust prints none.
   const surrounds = shown.contains(subject) || shown === document.body
-  let snapshot: unknown = null
-  let words = true
-  if (!surrounds) {
-    const coverTree = output.tree(shown, () => aria.coverSnapshot(shown))
-    snapshot = coverTree.json
-    words = coverTree.hasWords
-  }
   // Every control the cover takes the pointer with, read in full: the list the answer prints is
   // cut to eight, and what the cover is (frames only or not) is decided before that cut.
   const taking = surrounds ? [] : takingControls(world, shown)
-  const controls = controlsOf(world, output, shown, taking, aria)
-  // The engine drops a textbox's own text, so a wordless snapshot is not a wordless cover.
-  const drawn = words
-    ? undefined
+  const controls = listedControls(world, shown, taking)
+  const words = surrounds || output.tree(shown, () => holdsWords(world, shown))
+  // What it draws, which Rust says beside a block that holds no words: the tree prints a
+  // `role=textbox` div without its own text.
+  const drawn = surrounds
+    ? []
     : output.tree(shown, () => Array.from(renderedText(shown).trim()))
+  const finalKind = frameKind(shown, kind, taking)
+  const labelled = finalKind.is === 'labels' ? [finalKind.control] : []
+  // One entry for every element the answer names, each once, so none is evicted before Rust has
+  // keyed them all in its capture.
+  const named = [...new Set([shown, ...controls, ...labelled])]
+  const pinned = world.pins.addAll(named)
+  const pinOf = new Map(named.map((element, at) => [element, pinned[at] ?? 0]))
+  const pin = (element: Element) => pinOf.get(element) ?? 0
   return {
     layer: coverNumber(layer),
-    ref: aria.refOf(shown),
-    role: controlRole(world, shown, aria),
-    name: nameOf(world, output, shown, aria),
+    pin: pin(shown),
     // A blank layer prints as itself, the dialog open over it after; a dialog shown for its
     // nameless layer prints as the dialog.
     markup: output.previewNode(behind ? layer : shown),
-    snapshot,
-    ...(drawn && drawn.length > 0
-      ? { text: drawn.slice(0, MAX_TEXT).join('') }
-      : {}),
-    controls,
-    blank:
-      !isFrame(shown) &&
-      !closed &&
-      controls.length === 0 &&
-      !words &&
-      !drawn?.length,
+    ...(drawn.length > 0 ? { text: drawn.slice(0, MAX_TEXT).join('') } : {}),
+    controls: controls.map(pin),
+    surrounds,
+    blank: !isFrame(shown) && !closed && controls.length === 0 && !words,
     behind,
     closed,
-    notice: !surrounds && inLiveRegion(shown, aria),
-    kind: frameKind(shown, kind, taking),
+    notice: !surrounds && inLiveRegion(shown),
+    kind:
+      finalKind.is === 'labels'
+        ? { is: 'labels', pin: pin(finalKind.control) }
+        : finalKind,
   }
 }
 
@@ -299,20 +307,18 @@ export function shownAs(
   layer: Element,
   point: Point,
   subject?: Element,
-  aria: CoverAria = coverAriaFor(world),
 ): Element {
-  return shownLayer(world, output, layer, point, subject, aria).shown
+  return shownLayer(world, output, layer, point, subject).shown
 }
 
 /** Keep the blank reading beside the chosen element: the click needs both, without a
- * second control walk or quiet snapshot just to decide which markup to print. */
+ * second control walk or words test just to decide which markup to print. */
 function shownLayer(
   world: World,
   output: FailureOutput,
   layer: Element,
   point: Point,
   subject: Element | undefined,
-  aria: CoverAria,
 ): { shown: Element; behind: boolean; closed: boolean } {
   const holds = subject
     ? layer.contains(subject) || layer === world.injected.document.body
@@ -321,11 +327,10 @@ function shownLayer(
     ? !layer.contains(subject) && inClosedPart(layer)
     : !holds && inClosedPart(layer)
   if (holds || closed) return { shown: layer, behind: false, closed }
-  const blank = isBlank(world, output, layer, aria)
+  const blank = isBlank(world, output, layer)
   const shown =
-    (blank
-      ? dialogBehind(world, layer, point, aria)
-      : soleDialog(world, layer, aria)) ?? layer
+    (blank ? dialogBehind(world, layer, point) : soleDialog(world, layer)) ??
+    layer
   // Only a blank face names a sibling behind it; a sole child dialog is the layer's content.
   return { shown, behind: blank && shown !== layer, closed }
 }
@@ -348,9 +353,9 @@ function isFrame(element: Element): boolean {
  */
 function frameKind(
   shown: Element,
-  kind: CoverKind,
+  kind: PageKind,
   taking: readonly Element[],
-): CoverKind {
+): PageKind {
   if (isFrame(shown)) return kind
   if (kind.is !== 'page' && kind.is !== 'frame') return kind
   const frames = taking.filter(isFrame)
@@ -374,11 +379,9 @@ function frameKind(
  * document's hit test names only the host.
  */
 export function whichDialog(
-  world: World,
   chain: readonly Element[],
   top: Element,
   point: Point,
-  aria: Pick<CoverAria, 'roleOf'> = coverAriaFor(world),
 ): Element {
   const path = coverPath(chain, top, point)
   const main = top.ownerDocument.querySelector('main, [role="main"]')
@@ -386,13 +389,21 @@ export function whichDialog(
   const face = coverFace(named)
   return (
     named.find((at) => {
-      const role = aria.roleOf(at) ?? ''
+      const role = roleOf(at)
       return DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role)
     }) ??
     face ??
-    named.find((at) => SECTION_ROLES.has(aria.roleOf(at) ?? '')) ??
+    named.find((at) => SECTION_ROLES.has(roleOf(at))) ??
     (pageElement(top, main) ? (path[0] ?? top) : top)
   )
+}
+
+/**
+ * The element's role for the page's decisions, `''` for none: the stand-in's pure-DOM role,
+ * which needs no layout or name computation and answers what the vendored engine answers.
+ */
+export function roleOf(element: Element): string {
+  return computeAriaRole(element) ?? ''
 }
 
 /** The click's shadow-aware hit path, shared before naming and face selection. */
@@ -447,20 +458,41 @@ export function coverFace(named: readonly Element[]): Element | undefined {
 }
 
 /**
- * No control of its own takes the pointer, and its snapshot holds no words: a backdrop, a blank
- * layer. Both read the composed tree (the engine's snapshot walks the roots it can read), so a
- * dialog drawn in a shadow root is not blank.
+ * No control of its own takes the pointer, and it draws no words (`holdsWords`): a backdrop, a
+ * blank layer. Both read the composed tree, the roots this world can read, so a dialog drawn in a
+ * shadow root is not blank.
  */
 export function isBlank(
   world: World,
   output: FailureOutput,
   element: Element,
-  aria: Pick<CoverAria, 'coverSnapshot'> = coverAriaFor(world),
 ): boolean {
   return (
     !isFrame(element) &&
     takingControls(world, element).length === 0 &&
-    !output.tree(element, () => aria.coverSnapshot(element).hasWords)
+    !output.tree(element, () => holdsWords(world, element))
+  )
+}
+
+/** The attributes whose words a snapshot prints as a name: a labelled icon, an image's text. */
+const WORD_ATTRIBUTES = ['aria-label', 'title', 'alt'] as const
+
+/**
+ * Whether the element draws words, as a snapshot of it would print some: rendered text in it or
+ * in a shadow root it holds, or an `aria-label`, `title` or `alt` on a shown element of its
+ * composed tree. The page's own test, where the engine's was "its snapshot holds a name or a
+ * text"; read under the walk's one bound (MAX_WALKED).
+ */
+function holdsWords(world: World, element: Element): boolean {
+  const { utils } = world.injected
+  const blank = (text: string | null) => (text ?? '').trim() === ''
+  return [element, ...composedDescendants(element)].some(
+    (at) =>
+      // A shadow root's top elements draw what the host's own text leaves out.
+      ((at === element || at.parentNode?.nodeType === 11) &&
+        !blank(renderedText(at))) ||
+      (WORD_ATTRIBUTES.some((name) => !blank(at.getAttribute(name))) &&
+        utils.isElementVisible(at)),
   )
 }
 
@@ -476,7 +508,6 @@ export function dialogBehind(
   world: World,
   backdrop: Element,
   point: Point,
-  aria: Pick<CoverAria, 'roleOf'> = coverAriaFor(world),
 ): Element | undefined {
   const { injected } = world
   // The document's own query, with no count: a portal renders its dialog at the end of `<body>`,
@@ -491,8 +522,7 @@ export function dialogBehind(
   for (const candidate of candidates) {
     if (backdrop.contains(candidate) || candidate.contains(backdrop)) continue
     if (!injected.utils.isElementVisible(candidate)) continue
-    const role = aria.roleOf(candidate) ?? ''
-    if (!DIALOG_ROLES.has(role) && !inTopLayer(candidate)) continue
+    if (!DIALOG_ROLES.has(roleOf(candidate)) && !inTopLayer(candidate)) continue
     if (!standsOn(candidate, backdrop)) continue
     if (takingControls(world, candidate).length === 0) continue
     const box = candidate.getBoundingClientRect()
@@ -514,16 +544,13 @@ export function takesPointer(element: Element): boolean {
  * A notice that may go by itself: a live region on the cover or around it, by a notice's role or
  * by `aria-live`. Its answer says so, beside its controls.
  */
-function inLiveRegion(
-  cover: Element,
-  aria: Pick<CoverAria, 'roleOf'>,
-): boolean {
+function inLiveRegion(cover: Element): boolean {
   for (
     let at: Element | undefined = cover;
     at;
     at = at.assignedSlot ?? parentOrHost(at)
   ) {
-    if (NOTICE_ROLES.has(aria.roleOf(at) ?? '')) return true
+    if (NOTICE_ROLES.has(roleOf(at))) return true
     const live = at.getAttribute('aria-live')
     if (live !== null && live !== 'off') return true
   }
@@ -652,16 +679,6 @@ export function inTopLayer(element: Element): boolean {
   }
 }
 
-/** The accessible name, read under the mask. */
-export function nameOf(
-  world: World,
-  output: FailureOutput,
-  element: Element,
-  aria: Pick<CoverAria, 'nameOf'> = coverAriaFor(world),
-): string {
-  return output.tree(element, () => aria.nameOf(element))
-}
-
 /** The roles that make an element a control, written in its `role` attribute. */
 const CONTROL_ROLES: ReadonlySet<string> = new Set([
   'button',
@@ -687,24 +704,21 @@ function explicitControl(element: Element): boolean {
 
 /**
  * The one dialog a nameless cover holds: the cover has no dialog-like and no notice role and no
- * accessible name, and its composed tree holds exactly one shown element whose role is `dialog`
- * or `alertdialog` (an open `<dialog>` counts; `aria-modal` alone does not). None, or two or
- * more, a dialog nested in a dialog included: `undefined`, and the cover is shown as itself.
- * The count runs inside the walk's bound (MAX_WALKED), a named limit: a second dialog past it is
- * not seen. Giving up at the bound would take the name from every cover that holds one large
- * dialog, which is commoner, and counting past it costs a second walk.
+ * name of its own (`labelOf`, the page's labelling attributes, which is what names a plain
+ * container), and its composed tree holds exactly one shown element whose role is `dialog` or
+ * `alertdialog` (an open `<dialog>` counts; `aria-modal` alone does not). None, or two or more, a
+ * dialog nested in a dialog included: `undefined`, and the cover is shown as itself. The count
+ * runs inside the walk's bound (MAX_WALKED), a named limit: a second dialog past it is not seen.
+ * Giving up at the bound would take the name from every cover that holds one large dialog, which
+ * is commoner, and counting past it costs a second walk.
  */
-function soleDialog(
-  world: World,
-  cover: Element,
-  aria: Pick<CoverAria, 'roleOf' | 'nameOf'>,
-): Element | undefined {
+function soleDialog(world: World, cover: Element): Element | undefined {
   const { utils } = world.injected
-  const role = aria.roleOf(cover) ?? ''
+  const role = roleOf(cover)
   if (DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role)) return undefined
-  if (aria.nameOf(cover).trim() !== '') return undefined
+  if (labelOf(cover) !== '') return undefined
   const dialogs = composedDescendants(cover).filter((element) => {
-    const its = aria.roleOf(element)
+    const its = roleOf(element)
     return (
       (its === 'dialog' || its === 'alertdialog') &&
       utils.isElementVisible(element)
@@ -725,17 +739,6 @@ const NATIVE_CONTROLS =
  */
 export function coverControl(element: Element): boolean {
   return element.matches(NATIVE_CONTROLS) || explicitControl(element)
-}
-
-/** A control's role as an answer prints it: a frame is an `iframe`, as a snapshot prints one. */
-export function controlRole(
-  world: World,
-  control: Element,
-  aria: Pick<CoverAria, 'roleOf'> = coverAriaFor(world),
-): string {
-  if (isFrame(control)) return 'iframe'
-  const role = aria.roleOf(control)
-  return !role || role === 'presentation' || role === 'none' ? 'generic' : role
 }
 
 /**
@@ -763,18 +766,17 @@ export function takingControls(world: World, shown: Element): Element[] {
 
 /**
  * Up to eight of the cover's controls that take the pointer, in their order. A dialog puts its
- * buttons last, so when there are more than eight the buttons are kept first. A snapshot's answer
- * words them here (`controlsOf`); `coverSurvey` pins them for Rust to word from its tree.
+ * buttons last, so when there are more than eight the buttons are kept first. The `cover` answer
+ * and `coverSurvey` pin them for Rust to word from its tree.
  */
 export function listedControls(
   world: World,
   shown: Element,
   taking: readonly Element[] = takingControls(world, shown),
-  aria: Pick<CoverAria, 'roleOf'> = coverAriaFor(world),
 ): Element[] {
   const kept = new Set<Element>(
     taking
-      .filter((control) => controlRole(world, control, aria) === 'button')
+      .filter((control) => roleOf(control) === 'button')
       .slice(0, MAX_CONTROLS),
   )
   for (const control of taking) {
@@ -784,33 +786,16 @@ export function listedControls(
   return taking.filter((control) => kept.has(control))
 }
 
-/** The cover's listed controls with their roles, names and refs. */
-export function controlsOf(
-  world: World,
-  output: FailureOutput,
-  shown: Element,
-  taking: readonly Element[] = takingControls(world, shown),
-  aria: Pick<CoverAria, 'roleOf' | 'nameOf' | 'refOf'> = coverAriaFor(world),
-): CoverControl[] {
-  return listedControls(world, shown, taking, aria).map((control) => ({
-    role: controlRole(world, control, aria),
-    name: nameOf(world, output, control, aria),
-    ref: aria.refOf(control),
-  }))
-}
-
 /**
  * How the cover stands to the control: spec section 2's table, the first row that holds. `above`
  * when `subject` is a page's iframe and the cover is in that page, above the control's frame.
  */
 export function kindOf(
-  world: World,
   subject: Element,
   chain: readonly Element[],
   point: Point,
   above: boolean,
-  aria: Pick<CoverAria, 'refOf' | 'nameOf'> = coverAriaFor(world),
-): CoverKind {
+): PageKind {
   const onTop = chain[0]
   if (!onTop) return { is: 'nothing' }
   if (folded(subject, point)) return { is: 'folded' }
@@ -820,12 +805,14 @@ export function kindOf(
   const label = ownLabel(subject, onTop)
   if (label) return labelKind(label)
   const labelled = labelledControl(subject, onTop)
-  if (labelled) return { is: 'labels', ref: aria.refOf(labelled) }
+  if (labelled) return { is: 'labels', control: labelled }
   const parent = parentOrHost(subject)
+  // No name hint reaches a click: its target was resolved in the page, so the drawing test reads
+  // the control's own label.
   if (
     onTop === parent ||
     (parent && onTop === parentOrHost(parent)) ||
-    drawingOf(world, subject, onTop, false, aria) !== null
+    drawingOf(subject, onTop, false) !== null
   )
     return { is: 'wrapper' }
   if (onTop.contains(subject) || onTop === document.documentElement)
@@ -908,12 +895,11 @@ export function ownPress(
   target: Element,
   point: Point,
   allowed: OwnAllowed,
-  aria: Pick<CoverAria, 'roleOf' | 'refOf' | 'nameOf'> = coverAriaFor(world),
 ): OwnChoice | undefined {
   const chain = hitChain(target, point)
   const onTop = chain?.[0]
   if (!chain || !onTop) return undefined
-  const kind = kindOf(world, target, chain, point, false, aria)
+  const kind = kindOf(target, chain, point, false)
   if (kind.is === 'label') {
     const label = ownLabel(target, onTop)
     if (!label) return undefined
@@ -939,7 +925,7 @@ export function ownPress(
       at = at.parentElement
     )
       if (!plainElement(at)) return undefined
-    const checked = checkedState(world, target, aria)
+    const checked = checkedState(world, target)
     if (checked === undefined) return undefined
     return {
       element: onTop,
@@ -948,8 +934,7 @@ export function ownPress(
     }
   }
   if (kind.is === 'partial') {
-    const role = aria.roleOf(target) ?? ''
-    if (!POINT_ROLES.has(role) && target.localName !== 'summary')
+    if (!POINT_ROLES.has(roleOf(target)) && target.localName !== 'summary')
       return undefined
     return {
       element: target,
@@ -1040,12 +1025,8 @@ export function labelPlainPoint(label: Element): Point | undefined {
 }
 
 /** A checkbox's, radio's or switch's state; `undefined` for any other control. */
-function checkedState(
-  world: World,
-  control: Element,
-  aria: Pick<CoverAria, 'roleOf'>,
-): boolean | undefined {
-  const role = aria.roleOf(control) ?? ''
+function checkedState(world: World, control: Element): boolean | undefined {
+  const role = roleOf(control)
   if (role !== 'checkbox' && role !== 'radio' && role !== 'switch')
     return undefined
   try {
@@ -1056,7 +1037,7 @@ function checkedState(
 }
 
 /** The label's links, and a point of it on none of them when it has some. */
-function labelKind(label: Element): CoverKind {
+function labelKind(label: Element): PageKind {
   const links = label.querySelectorAll('a[href]').length
   if (links === 0) return { is: 'label', links: 0 }
   const position = pointOffLinks(label)

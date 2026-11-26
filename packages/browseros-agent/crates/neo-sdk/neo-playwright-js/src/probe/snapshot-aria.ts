@@ -1,11 +1,10 @@
 /**
- * The snapshot-time ARIA-engine seam for the snapshot-on-top survey (`cover-survey.ts`) and
- * inert marking (`snapshot-inert.ts`), extending `CoverAria` with reads over the latest
- * snapshot's ref table and node links (apc-engine-design section 8.2).
+ * The engine snapshot's ref table, as inert marking (`snapshot-inert.ts`) reads it: the one read
+ * left of the old `snapshot` request, which Rust no longer sends (apc-engine-design 9.3). The
+ * seam stays so a test can hand marking a table of its own; the request and this file leave
+ * together.
  */
-import type { AriaNodeJSON, AriaSnapshotJSON } from '../prelude/vendored'
-import { type CoverAria, coverAriaFor } from './cover-aria'
-import { lastSnapshotNodes, lastSnapshotRefs, type World } from './world'
+import { lastSnapshotRefs, type World } from './world'
 
 /** Snapshot ref lookup and element order for the latest tree, hiding engine-internal entries. */
 export type SnapshotRefs = {
@@ -13,11 +12,9 @@ export type SnapshotRefs = {
   elements(): Iterable<Element>
 }
 
-/** Per-element ARIA reads plus snapshot-tree reads needed during a snapshot request. */
-export type SnapshotAria = CoverAria & {
-  surveyElements(): Iterable<Element>
+/** The snapshot reads inert marking needs. */
+export type SnapshotAria = {
   snapshotRefs(): SnapshotRefs
-  snapshotNodes(json: AriaSnapshotJSON): ReadonlyMap<AriaNodeJSON, Element>
 }
 
 const providers = new WeakMap<World, SnapshotAria>()
@@ -32,17 +29,7 @@ export function snapshotAriaFor(world: World): SnapshotAria {
 }
 
 function createEngineSnapshotAria(world: World): SnapshotAria {
-  const base = coverAriaFor(world)
   return {
-    ...base,
-    surveyElements() {
-      const refs = lastSnapshotRefs(world.injected)
-      return {
-        *[Symbol.iterator]() {
-          for (const { element } of refs.values()) yield element
-        },
-      }
-    },
     snapshotRefs() {
       const refs = lastSnapshotRefs(world.injected)
       return {
@@ -52,6 +39,5 @@ function createEngineSnapshotAria(world: World): SnapshotAria {
         },
       }
     },
-    snapshotNodes: (json) => lastSnapshotNodes(world.injected, json).nodes,
   }
 }

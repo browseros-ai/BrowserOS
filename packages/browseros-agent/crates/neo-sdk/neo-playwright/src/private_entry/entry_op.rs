@@ -175,9 +175,11 @@ impl Playwright {
             self.browser(),
             self.removal_fences(),
         );
-        let entry = EntryRun::new(self, &scope, fields.len())
-            .enter(tab, url.as_deref(), &fields)
-            .await;
+        // Boxed: the run holds every box's look, typing and read-back, which a host's own
+        // future would otherwise carry inline.
+        let entry =
+            Box::pin(EntryRun::new(self, &scope, fields.len()).enter(tab, url.as_deref(), &fields))
+                .await;
         // The values are zeroed here, before the answer leaves.
         drop(fields);
         entry

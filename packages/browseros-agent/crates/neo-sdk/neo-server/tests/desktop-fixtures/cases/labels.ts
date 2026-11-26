@@ -16,9 +16,7 @@ export const labelsCases = [
     ],
     "timeoutMs": 20000,
     "expectation": {
-      "kind": "xfail",
-      "reason": "The snapshot omits the clickable ref for the hidden checkbox's visible label.",
-      "signature": "hidden-label-ref"
+      "kind": "pass"
     },
     "source": "packages/browseros-agent/contracts/claw-mcp/tests/cases-labels.ts:18-43",
     "sourceSha": "a7e536e152a4835abe9974498b27a5c927dd2e0d"

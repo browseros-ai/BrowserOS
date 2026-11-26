@@ -80,6 +80,9 @@ docs/plans/
 !crates/neo-sdk/neo-playwright/tests/data/**/*.js
 # The oracle reader the fixture recorder splices into injected.js is a source.
 !crates/neo-sdk/neo-snapshot-apc/tests/support/oracle.js
+# The page build writes the probe with upstream's ARIA engine for the APC engine's differential
+# tests; `build:check` keeps it current, so it is committed as the page assets are.
+!crates/neo-sdk/neo-snapshot-apc/tests/data/oracle-injected.js
 **/tests/**/*.d.ts
 **/tests/**/*.d.ts.map
 

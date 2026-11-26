@@ -1,20 +1,15 @@
 /**
  * The survey behind a snapshot's `# on top:` lines: which layers cover the page's controls.
- * The click module owns hits, faces, control eligibility and names. This module owns grouping,
- * reach and weak per-document memory; child frames and pressing are outside its scope.
+ * The click module owns hits, faces and control eligibility. This module owns grouping, reach and
+ * weak per-document memory; child frames and pressing are outside its scope.
  *
- * One survey, two answers (apc-engine-design 8.2):
- *   surveyCovers  inside a `snapshot` request, over the engine snapshot it just took: the layers
- *                 worded by role, name and ref, and the snapshot's whole-view nodes marked
- *   coverSurvey   a request of its own, for a page whose snapshot comes from APC and so has no
- *                 engine snapshot under it: the page's own controls are tested, and every element
- *                 the answer names comes back pinned, for Rust to word from its tree
+ * `coverSurvey` answers for a page whose snapshot comes from APC (apc-engine-design 8.2): the
+ * page's own controls are tested, every decision reads the live page (roles through the
+ * stand-in's `computeAriaRole`, words through its own text), and every element the answer names
+ * comes back pinned, for Rust to word from its tree and to mark the tree's nodes under.
  */
-import type { AriaNodeJSON, AriaSnapshotJSON } from '../prelude/vendored'
 import { composedElements } from './composed-tree'
 import {
-  controlRole,
-  controlsOf,
   coverControl,
   coverFace,
   coverPath,
@@ -26,9 +21,9 @@ import {
   isBlank,
   kindOf,
   listedControls,
-  nameOf,
   pageElement,
   parentOrHost,
+  roleOf,
   saysLoading,
   shownAs,
   takesPointer,
@@ -37,13 +32,11 @@ import {
 import type { FailureOutput } from './failure-output'
 import { renderedText } from './private-look'
 import type {
-  CoverControl,
   CoverSurveyRequest,
   PinnedLayer,
   Point,
   ReplyTo,
 } from './protocol'
-import { type SnapshotAria, snapshotAriaFor } from './snapshot-aria'
 import type { World } from './world'
 
 const MAX_CONTROLS = 300
@@ -86,33 +79,18 @@ type Remembered = {
 }
 const memory = new WeakMap<Document, Remembered[]>()
 
-/** What a layer is called by in the snapshot's answer. */
-type RefName = { role: string; name: string; ref: string }
-
 /**
- * A layer's facts, `N` naming it and `C` each of its listed controls. Page facts are masked
- * here; the shared Rust formatter owns their public words.
+ * A layer's facts: the element it is named by and its listed controls, which Rust names from its
+ * tree, beside what the page decides. Page facts are masked here; the shared Rust formatter owns
+ * their public words.
  */
-type Note<N, C> = N & {
+type Note = {
+  named: Element
   blank: boolean
   loading: boolean
   wholeView: boolean
-  controls: C[]
+  controls: Element[]
   firstWords?: string
-}
-
-export type SurveyLayer = Note<RefName, CoverControl>
-
-/**
- * How an answer names what a layer holds. The survey asks in a fixed order (a layer's controls,
- * then what names it, layer by layer), which the snapshot's answer depends on: its refs are
- * minted as they are first named, and the agent reads their numbers.
- */
-type Wording<N, C> = {
-  /** A root's listed controls, the identity that dedupes them across roots, and what names it. */
-  controls(root: Element): C[]
-  same(control: C): unknown
-  named(element: Element): N
 }
 
 type Phases = {
@@ -123,51 +101,14 @@ type Phases = {
   marks: number
   stopped: boolean
 }
-type Layer<N, C> = { order: number; held: Element[]; note: Note<N, C> }
+type Layer = { order: number; held: Element[]; note: Note }
 type Group = { faces: Face[]; held: Element[]; controlsFrom: Element[] }
-
-/** The survey of a `snapshot` request, over the engine snapshot `json` it took. */
-export function surveyCovers(
-  world: World,
-  output: FailureOutput,
-  json: AriaSnapshotJSON,
-  aria: SnapshotAria = snapshotAriaFor(world),
-): {
-  layers: SurveyLayer[]
-  tested: number
-  marksSkipped: boolean
-  phases: Phases
-} {
-  const { layers, tested, phases } = surveyLayers(
-    world,
-    output,
-    aria.surveyElements(),
-    aria,
-    {
-      controls: (root) => controlsOf(world, output, root, undefined, aria),
-      same: (control) => control.ref,
-      named: (element) => ({
-        role: controlRole(world, element, aria),
-        name: nameOf(world, output, element, aria),
-        ref: aria.refOf(element),
-      }),
-    },
-  )
-  const marksSkipped = markBlocks(json, layers, inside, phases, aria)
-  return {
-    layers: layers.map(({ note }) => note),
-    tested,
-    marksSkipped,
-    phases,
-  }
-}
 
 /**
  * `coverSurvey`: the survey of a page whose snapshot comes from APC. It tests the page's own
- * controls instead of an engine snapshot's refs, and names each layer by pins: the element it is
- * named by, its listed controls and, for a whole-view layer with words, the elements that hold
- * it, under which Rust marks the tree's top-most nodes. Decisions read the same SnapshotAria
- * provider as the snapshot's survey; only names and refs are left to Rust.
+ * controls, and names each layer by pins: the element it is named by, its listed controls and,
+ * for a whole-view layer with words, the elements that hold it, under which Rust marks the
+ * tree's top-most nodes. The page decides; names and refs are left to Rust.
  */
 export function coverSurvey(
   world: World,
@@ -176,7 +117,6 @@ export function coverSurvey(
   _nodes: readonly unknown[],
   output: FailureOutput,
 ): ReplyTo<'coverSurvey'> {
-  const aria = snapshotAriaFor(world)
   // One budget for the whole survey: finding the population spends from it first, and the list
   // is built once, since the page guard reads the population again.
   const started = performance.now()
@@ -185,12 +125,6 @@ export function coverSurvey(
     world,
     output,
     population.controls,
-    aria,
-    {
-      controls: (root) => listedControls(world, root, undefined, aria),
-      same: (control) => control,
-      named: (element) => ({ named: element }),
-    },
     started,
   )
   phases.stopped ||= population.stopped
@@ -287,17 +221,15 @@ function inside(root: Element, element: Element): boolean {
 }
 
 /**
- * The survey both answers share, over `elements` in tree order. It finds, groups and names the
- * layers, layer by layer through `wording`, and keeps the document's memory of them.
+ * The survey over `elements` in tree order. It finds, groups and describes the layers, and keeps
+ * the document's memory of them.
  */
-function surveyLayers<N, C>(
+function surveyLayers(
   world: World,
   output: FailureOutput,
   elements: Iterable<Element>,
-  aria: SnapshotAria,
-  wording: Wording<N, C>,
-  started: number = performance.now(),
-): { layers: Layer<N, C>[]; tested: number; phases: Phases } {
+  started: number,
+): { layers: Layer[]; tested: number; phases: Phases } {
   const { injected } = world
   const document = injected.document
   const phases: Phases = {
@@ -320,12 +252,11 @@ function surveyLayers<N, C>(
     samples,
     started,
     phases,
-    aria,
   )
   phases.hits = performance.now() - started
-  const page = pageGuard(elements, phases, main, aria)
+  const page = pageGuard(elements, phases, main)
   const resolving = performance.now()
-  const found = facesFromHits(world, hits, page, aria)
+  const found = facesFromHits(hits, page)
   // This is the first use of the guard, so its entire count time belongs to this resolution.
   // Charge that work to counting rather than to naming.
   if (hits.length)
@@ -346,7 +277,7 @@ function surveyLayers<N, C>(
   phases.count = 0
   const centre = { x: innerWidth / 2, y: innerHeight / 2 }
   for (const face of found.values())
-    face.named = shownAs(world, output, face.named, centre, undefined, aria)
+    face.named = shownAs(world, output, face.named, centre)
   const groups = joinFaces(found, inside).map((faces) => ({
     faces,
     ...holdersOf(faces, inside, page),
@@ -364,8 +295,6 @@ function surveyLayers<N, C>(
         tested,
         samples,
         inside,
-        aria,
-        wording,
       ),
     )
     .filter((layer) => layer !== undefined)
@@ -388,7 +317,6 @@ function findFaces(
   samples: Sample[],
   started: number,
   phases: Phases,
-  aria: SnapshotAria,
 ) {
   const main = world.injected.document.querySelector('main, [role="main"]')
   const hits: Hit[] = []
@@ -401,7 +329,7 @@ function findFaces(
     const top = chain.at(-1)
     if (top) sample.deepest = rememberHit(hits, chain, top, point, false, main)
   }
-  // The provider yields candidates in tree order. Filtering and testing in one pass means a
+  // The population comes in tree order. Filtering and testing in one pass means a
   // budget stop leaves a tested prefix, never a selected list whose tail was silently untested.
   for (const element of elements) {
     if (
@@ -421,9 +349,7 @@ function findFaces(
     if (!point) continue
     const subject = world.injected.retarget(element, 'button-link') ?? element
     const chain = hitChain(subject, point)
-    const kind = chain
-      ? kindOf(world, subject, chain, point, false, aria).is
-      : 'nothing'
+    const kind = chain ? kindOf(subject, chain, point, false).is : 'nothing'
     const covered = kind === 'page' || kind === 'frame'
     tested.push({ element, clear: !covered })
     if (chain && covered)
@@ -460,10 +386,8 @@ function rememberHit(
 
 /** A page shell can carry another fixed layer. Peeling it preserves that layer's own root. */
 function facesFromHits(
-  world: World,
   hits: Hit[],
   page: (element: Element) => boolean,
-  aria: Pick<SnapshotAria, 'roleOf'>,
 ): Map<Element, Face> {
   const found = new Map<Element, Face>()
   for (const hit of hits) {
@@ -490,7 +414,7 @@ function facesFromHits(
       if (!page(root)) known.roots.add(root)
       continue
     }
-    const named = whichDialog(world, hit.chain, root, hit.point, aria)
+    const named = whichDialog(hit.chain, root, hit.point)
     found.set(element, {
       element,
       named: page(named) ? element : named,
@@ -506,7 +430,6 @@ function pageGuard(
   elements: Iterable<Element>,
   phases: Phases,
   main: Element | null,
-  aria: Pick<SnapshotAria, 'roleOf'>,
 ): (element: Element) => boolean {
   let controls: Element[] | undefined
   const cached = new Map<Element, boolean>()
@@ -516,7 +439,7 @@ function pageGuard(
   const meaning = (element: Element) => {
     let known = meanings.get(element)
     if (!known) {
-      const role = aria.roleOf(element) ?? ''
+      const role = roleOf(element)
       const top = inTopLayer(element)
       known = {
         dialog: role === 'dialog' || role === 'alertdialog' || top,
@@ -671,7 +594,7 @@ function holdersOf(
   return { held, controlsFrom }
 }
 
-function describeLayer<N, C>(
+function describeLayer(
   world: World,
   output: FailureOutput,
   group: Group,
@@ -681,12 +604,10 @@ function describeLayer<N, C>(
   tested: Tested[],
   samples: Sample[],
   inside: Inside,
-  aria: SnapshotAria,
-  wording: Wording<N, C>,
-): Layer<N, C> | undefined {
+): Layer | undefined {
   const { faces, held, controlsFrom } = group
   const face =
-    faces.find((face) => isBlank(world, output, face.element, aria)) ?? faces[0]
+    faces.find((face) => isBlank(world, output, face.element)) ?? faces[0]
   if (!face) return undefined
   const old = remembered.find((entry) =>
     faces.some((face) => entry.face.deref() === face.element),
@@ -704,13 +625,10 @@ function describeLayer<N, C>(
     samples.every(({ deepest }) => deepest && belongs(deepest)) &&
     tested.every(({ element, clear }) => !clear || ownOfAny(element)) &&
     tested.some(({ element, clear }) => !clear && !belongs(element))
-  const controls = Array.from(
-    new Map(
-      controlsFrom
-        .flatMap((root) => wording.controls(root))
-        .map((control) => [wording.same(control), control]),
-    ).values(),
-  )
+  // Each control once, in the order its first root lists it.
+  const controls = [
+    ...new Set(controlsFrom.flatMap((root) => listedControls(world, root))),
+  ]
   const words = output.tree(named, () =>
     renderedText(named).trim().replace(/\s+/g, ' '),
   )
@@ -718,7 +636,7 @@ function describeLayer<N, C>(
     !inClosedPart(named) &&
     controls.length === 0 &&
     !words &&
-    isBlank(world, output, named, aria)
+    isBlank(world, output, named)
   for (const member of faces)
     next.push({
       face: new WeakRef(member.element),
@@ -730,7 +648,7 @@ function describeLayer<N, C>(
     order,
     held,
     note: {
-      ...wording.named(named),
+      named,
       blank,
       loading: controlsFrom.some(saysLoading),
       wholeView,
@@ -738,48 +656,6 @@ function describeLayer<N, C>(
       ...(words ? { firstWords: Array.from(words).slice(0, 61).join('') } : {}),
     },
   }
-}
-
-/** Link and mark only an actual whole-view layer, after its reach is known. */
-function markBlocks(
-  json: AriaSnapshotJSON,
-  layers: Layer<RefName, CoverControl>[],
-  inside: Inside,
-  phases: Phases,
-  aria: Pick<SnapshotAria, 'snapshotNodes'>,
-): boolean {
-  if (!layers.some(({ note }) => note.wholeView && !note.blank)) return false
-  const started = performance.now()
-  let nodes: ReadonlyMap<AriaNodeJSON, Element>
-  try {
-    nodes = aria.snapshotNodes(json)
-  } catch {
-    phases.linking = performance.now() - started
-    return true
-  }
-  phases.linking = performance.now() - started
-  const marking = performance.now()
-  const pending = [...json]
-  while (pending.length) {
-    const node = pending.pop()
-    if (!node) continue
-    const element = nodes.get(node)
-    const layer =
-      element &&
-      layers.find(
-        ({ held, note }) =>
-          note.wholeView &&
-          !note.blank &&
-          held.some((root) => inside(root, element)),
-      )
-    if (layer) {
-      node.onTop = layer.note.ref
-    } else
-      for (const child of node.children ?? [])
-        if (typeof child !== 'string') pending.push(child)
-  }
-  phases.marks = performance.now() - marking
-  return false
 }
 
 function middle(element: Element): Point | undefined {

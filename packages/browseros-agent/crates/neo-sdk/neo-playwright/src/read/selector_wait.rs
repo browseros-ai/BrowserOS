@@ -8,7 +8,7 @@ use crate::backoff::Backoff;
 use crate::locator_handler::{self, Prechecks};
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, Read};
+use crate::probe::{ProbeReply, ProbeRequest, Read};
 use crate::read::element_handle::{self, Located};
 use crate::read::element_read;
 use crate::resolve::{Landed, Resolver};
@@ -175,8 +175,8 @@ impl Polls {
             if prechecks == Prechecks::Run {
                 Box::pin(locator_handler::checkpoint(scope, page)).await?;
             }
-            let request = |last, frame_visible| ProbeRequest::Read {
-                target: ProbeTarget::Chunk(last),
+            let request = |target, frame_visible| ProbeRequest::Read {
+                target,
                 strictness: strict,
                 frame_visible,
                 read: Read::Located,

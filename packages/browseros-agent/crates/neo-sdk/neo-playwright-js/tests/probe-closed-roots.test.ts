@@ -1,5 +1,6 @@
-// Closed shadow roots on the built asset: a snapshot handed seeds (the first `closedRoots` of its
-// nodes) opens their roots to the world's engine for the rest of the document's life. linkedom
+// Closed shadow roots on the built asset: `openClosedRoots` handed seeds (the nodes after the
+// call's root, from an APC capture's contract field 31) opens their roots to the world's engines
+// for the rest of the document's life. linkedom
 // shares one set of DOM prototypes with the test, so the page world's own `null` is covered on a
 // real browser (tests/prelude_live.rs), with the hit test, frames and nesting.
 import { afterEach, expect, it } from 'bun:test'
@@ -34,53 +35,44 @@ function booted() {
   return { probe, closed, open, bar }
 }
 
-const SNAPSHOT = { op: 'snapshot', root: 'document', mode: 'ai' }
-/** A locator's snapshot of the button, which CSS reaches through every root the engine enters. */
-const atButton = {
-  op: 'snapshot',
-  root: { chunk: parseSelector('button') },
-  mode: 'ai',
+/** The first button the page's CSS engine reaches, through every root it may enter. */
+const button = {
+  op: 'read',
+  target: { chunk: parseSelector('button') },
+  strictness: 'firstMatch',
+  frameVisible: true,
+  read: { kind: 'textContent' },
 }
 
-/** Every string of a snapshot reply's tree. */
-function texts(reply: unknown): string {
-  return JSON.stringify(Reflect.get(Object(reply), 'json'))
+/** `openClosedRoots` with `seeds` handed after the call's root, as Rust's call_with_nodes hands them. */
+function open(probe: ProbePage, ...seeds: unknown[]): unknown {
+  return probe.call({ op: 'openClosedRoots' }, null, ...seeds)
 }
 
 it('tests that a seed opens its closed root to every later read of the world, and nothing else does', () => {
-  const { probe, closed, open } = booted()
-  const button = closed.firstChild
-  expect(texts(probe.call(SNAPSHOT))).not.toContain('Closed button')
-  expect(probe.call(atButton)).toEqual({ kind: 'none' })
-  // A count of zero, or none, hands no seed: the node is a clickable target, not a seed.
-  expect(
-    texts(probe.call({ ...SNAPSHOT, closedRoots: 0 }, null, button)),
-  ).not.toContain('Closed button')
+  const { probe, closed, open: openRoot } = booted()
+  expect(probe.call(button)).toEqual({ kind: 'none' })
   // Seeds that name no closed root open nothing: the document, an open root's node, no node.
   const outside = probe.document.querySelector('p')
-  expect(
-    texts(
-      probe.call(
-        { ...SNAPSHOT, closedRoots: 3 },
-        null,
-        outside,
-        open.firstChild,
-        { not: 'a node' },
-      ),
-    ),
-  ).not.toContain('Closed button')
-
-  const fed = probe.call({ ...SNAPSHOT, closedRoots: 1 }, null, button)
-  expect(texts(fed)).toContain('Closed button')
-  expect(texts(fed)).toContain('Open text')
-  expect(texts(probe.call(SNAPSHOT))).toContain('Closed button')
-  // A locator reaches inside it too, once the root was handed in.
-  expect(probe.call(atButton)).toMatchObject({ kind: 'snapshot' })
+  expect(open(probe, outside, openRoot.firstChild, { not: 'a node' })).toEqual({
+    kind: 'value',
+    value: null,
+  })
+  expect(probe.call(button)).toEqual({ kind: 'none' })
+  // A seed inside the closed root opens it for every later read of this world.
+  expect(open(probe, closed.firstChild)).toEqual({ kind: 'value', value: null })
+  expect(probe.call(button)).toMatchObject({
+    kind: 'read',
+    value: 'Closed button',
+  })
+  expect(probe.call(button)).toMatchObject({
+    kind: 'read',
+    value: 'Closed button',
+  })
 })
 
 it("tests that a closed root of BrowserOS's own UI stays hidden when it is handed in", () => {
   const { probe, bar } = booted()
-  const fed = probe.call({ ...SNAPSHOT, closedRoots: 1 }, null, bar.firstChild)
-  expect(texts(fed)).not.toContain('Bar button')
-  expect(texts(probe.call(SNAPSHOT))).not.toContain('Bar button')
+  open(probe, bar.firstChild)
+  expect(probe.call(button)).toEqual({ kind: 'none' })
 })

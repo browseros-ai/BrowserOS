@@ -8,6 +8,7 @@ use crate::op_scope::{AdmittedPage, OpScope};
 use crate::page::PageState;
 use crate::probe::ProbeFailure;
 use crate::target::PageRef;
+use crate::tree::TabTree;
 use crate::world::{Endpoint, FrameWorlds, Installer, IsolatedWorld, Place};
 use crate::{Playwright, PlaywrightError};
 
@@ -89,6 +90,11 @@ impl<'op> OpPage<'op> {
     /// The tab's isolated worlds.
     pub(crate) fn frames(&self) -> &FrameWorlds {
         self.state.frames()
+    }
+
+    /// The tab's APC engine state: captures, refs and the private-node mirror.
+    pub(crate) fn tree(&self) -> &TabTree {
+        self.state.tree()
     }
 
     /// The tab's state, for what outlives the op: its input lock, its focus lease.

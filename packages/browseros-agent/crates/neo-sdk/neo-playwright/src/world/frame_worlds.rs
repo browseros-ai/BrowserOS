@@ -331,7 +331,6 @@ impl FrameWorlds {
     /// Takes the seq of every document life `DocTable` retired since the last call, whichever path
     /// retired it: an invalidated world, a capture that displaced a frame's document, or an
     /// explicit [`Self::retire_doc`]. `TabTree` drops the refs printed under them.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     #[must_use = "a dropped seq keeps that document life's refs live"]
     pub(crate) fn take_retired_seqs(&self) -> Vec<FrameSeq> {
         self.lock().docs.take_retired()
@@ -339,7 +338,6 @@ impl FrameWorlds {
 
     /// Returns all currently live cached worlds so a capture can check `installed_at <
     /// requested_at` and prove them with `Describe` (design section 6.3).
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     pub(crate) fn cached_worlds(&self) -> Vec<IsolatedWorld> {
         let inner = self.lock();
         inner
@@ -351,7 +349,7 @@ impl FrameWorlds {
 
     /// Returns a live cached world for `frame`, preferring the most recent install if two
     /// sessions transiently hold cells for the same frame.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
+    #[cfg(test)]
     pub(crate) fn cached_world_for_frame(&self, frame: &FrameId) -> Option<IsolatedWorld> {
         let inner = self.lock();
         inner
@@ -369,7 +367,6 @@ impl FrameWorlds {
     /// Captures of one tab can be in flight together, so reports arrive in any order. A report
     /// older than its frame's last one changes nothing: the capture saw a document the frame has
     /// since left, and acting on it would retire the frame's live document for good.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     pub(crate) fn seq_for_doc(
         &self,
         ctx: DocContext<'_>,
@@ -454,7 +451,6 @@ impl FrameWorlds {
 
     /// Binds a proven [`IsolatedWorld`] to `token`, preserving any previously reserved
     /// [`FrameSeq`]. Returns `None` if `token` is already `Retired`.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     pub(crate) fn bind_proven_world(
         &self,
         token: &DocToken,
@@ -503,7 +499,6 @@ impl FrameWorlds {
 
     /// Resolves `token` to its live bound world and parent chain, reservation, retirement, or
     /// unknown status.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     pub(crate) fn lookup_doc(&self, token: &DocToken) -> DocLookup {
         let inner = self.lock();
         let Some(binding) = inner.docs.binding(token) else {
@@ -514,7 +509,6 @@ impl FrameWorlds {
 
     /// Resolves `seq` through [`DocTable`], falling back to `WorldsInner::dead` for seqs never
     /// recorded in `DocTable` (such as foreign seqs from an earlier `Playwright` process).
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     pub(crate) fn lookup_doc_seq(&self, seq: FrameSeq) -> DocLookup {
         let inner = self.lock();
         match inner.docs.binding_by_seq(seq) {
@@ -530,7 +524,6 @@ impl FrameWorlds {
 
     /// Transitions an active (`Reserved` or `Bound`) document to `Retired` when a fresh capture
     /// proves it is no longer present (design section 6.2 case 4).
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     pub(crate) fn retire_doc(&self, token: &DocToken) -> Option<FrameSeq> {
         self.lock()
             .docs
@@ -701,7 +694,6 @@ impl WorldsInner {
     /// already held is permitted only for a main-frame document replacing an explicit
     /// `"about:blank"` document (Playwright AR-053), which retires as of `at`. A document that comes
     /// back never takes its own old seq, which stays retired.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     fn resolve_doc_seq(
         &mut self,
         candidate: FrameSeq,
@@ -729,7 +721,6 @@ impl WorldsInner {
 
     /// Seeds `main_url` from an APC capture when no commit or world boot has recorded one yet,
     /// so a later `MainCommitted` knows whether the main frame left a real page or `about:blank`.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     fn record_initial_main_url(&mut self, url: Option<&str>) {
         if self.main_url.is_none()
             && let Some(url) = url
@@ -876,7 +867,6 @@ impl WorldsInner {
         Some(parents)
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     fn is_live_install(&self, world: &IsolatedWorld) -> bool {
         let Some(session) = world.session_id() else {
             return false;
@@ -891,7 +881,6 @@ impl WorldsInner {
             .is_some_and(|held| held.same_install(world))
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     fn resolve_binding(&self, binding: &DocBinding) -> DocLookup {
         match binding {
             DocBinding::Bound { seq, world } => {

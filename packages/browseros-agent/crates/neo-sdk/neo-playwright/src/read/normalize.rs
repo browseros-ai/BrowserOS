@@ -17,7 +17,7 @@ use ts_rs::TS;
 
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget};
+use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest};
 use crate::resolve::{self, FramePath, Landed, Resolver};
 use crate::target::{Strictness, Target};
 use crate::wire::options;
@@ -58,9 +58,7 @@ pub(crate) async fn normalize(
     };
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, Strictness::FirstMatch);
-    let request = |last, _| ProbeRequest::Selector {
-        target: ProbeTarget::Chunk(last),
-    };
+    let request = |target, _| ProbeRequest::Selector { target };
     let no_element = || {
         scope.fail(
             ErrorCode::ElementDetached,

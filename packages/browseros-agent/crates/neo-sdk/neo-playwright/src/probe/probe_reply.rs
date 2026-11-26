@@ -25,7 +25,7 @@ use crate::world::{FrameSeq, Pin};
 /// contract: a world keeps the probe an earlier build installed, and the install replaces that
 /// probe only when its number differs (`engine_source`), so a shape changed under the same
 /// number reaches this build in the old shape. The lock's test catches a change without a bump.
-pub(crate) const PROBE_PROTOCOL: u32 = 54;
+pub(crate) const PROBE_PROTOCOL: u32 = 56;
 
 /// One message template for page-side and stitched depth refusals. The numeric reply field,
 /// rather than these words, identifies a child that must become partial.
@@ -64,9 +64,14 @@ pub(crate) enum ProbeReply {
         #[ts(optional)]
         stale_ref: Option<String>,
     },
-    /// Upstream's `strict mode violation: <locator> resolved to N elements: ...`.
+    /// Upstream's `strict mode violation: <locator> resolved to N elements: ...`. A violation the
+    /// page decided also lists what it wrote the message from, so Rust can put the tree's role
+    /// locators in its `aka` lines (`resolve::strict_akas`); Rust's own answers leave it out.
     Strict {
         message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        listing: Option<StrictListing>,
     },
     /// One element, pinned, with upstream's preview of it.
     Element {
@@ -468,7 +473,11 @@ pub(crate) struct CoverMark {
 }
 
 /// What a covered pointer action says about its cover (covered-click spec section 2), read in
-/// the world that saw it. Its text comes from the snapshot's own reads, under the mask (R47).
+/// the world that saw it. The page finds the cover and decides every fact here from the live
+/// page. It pins the elements the answer names and leaves naming them to Rust, which reads their
+/// role, name and ref from a capture taken after this reply (design 8.2; `action/cover.rs`
+/// `covered_answer`), as the snapshot's `# on top:` lines are named. Its text is read under the
+/// mask (R47).
 #[derive(Debug, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[expect(
@@ -481,34 +490,31 @@ pub(crate) struct CoverFacts {
     /// `main` for one control and the banner for the next.
     pub(crate) layer: u32,
     /// The cover, "which dialog": walking up from what is on top, the first dialog-like role,
-    /// else the first section role, else the root of its subtree. The ref the snapshot printed
-    /// for it, else one minted for it (`RefMap.forElement`), which `getByRef` resolves.
-    pub(crate) r#ref: String,
-    pub(crate) role: String,
-    #[ts(type = "string")]
-    pub(crate) name: PageText,
+    /// else the first section role, else the root of its subtree. The tree names it and prints
+    /// its block. Its ref is the one a snapshot printed for it, else one minted for it, which
+    /// `getByRef` resolves. Every pin of the reply is in one entry, so none is evicted before
+    /// Rust has keyed them all.
+    pub(crate) pin: Pin,
     /// Upstream's markup line for it, as today's `intercepts pointer events` line prints.
     #[ts(type = "string")]
     pub(crate) markup: PageText,
-    /// Its own snapshot (`ariaSnapshotJSON` in `default` mode, which mints no ref and moves
-    /// nothing the agent's own snapshots depend on), which Rust prints as the covered block
-    /// where it writes the error's cover (action/cover.rs). `null` for a cover that holds the
-    /// control: its snapshot would be the page's.
-    #[ts(type = "unknown")]
-    pub(crate) snapshot: Value,
-    /// Only when that snapshot holds no words: what the cover draws as text, cut at 300
-    /// characters. The engine drops a `role=textbox` div's own text, so such a cover prints as
-    /// a nameless textbox, and its words are here.
+    /// What the cover draws as text, cut at 300 characters; absent when it draws none or holds
+    /// the control. Rust prints it only when the cover's block holds no words: the tree prints a
+    /// `role=textbox` div without its own text, so such a cover's words are here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "string")]
     pub(crate) text: Option<PageText>,
-    /// Up to eight of its controls that take the pointer, a dialog's buttons kept.
-    pub(crate) controls: Vec<CoverControl>,
-    /// The cover holds no control and draws no text.
+    /// Up to eight of its controls that take the pointer, a dialog's buttons kept, in order.
+    pub(crate) controls: Vec<Pin>,
+    /// The cover holds the control (its wrapper, its label, the page's root): its block would be
+    /// the page's, so the answer prints none.
+    pub(crate) surrounds: bool,
+    /// The cover holds no control and draws no words: no text, and no `aria-label`, `title` or
+    /// `alt` on it or in it.
     pub(crate) blank: bool,
-    /// The cover is a blank layer, and the ref, role, name, snapshot and controls are those of
-    /// the dialog open over it, nearest the point; `markup` stays the layer's. The point lies
-    /// under the layer: the dialog is not what takes the click.
+    /// The cover is a blank layer, and the pin and controls are those of the dialog open over it,
+    /// nearest the point; `markup` stays the layer's. The point lies under the layer: the dialog
+    /// is not what takes the click.
     #[serde(default)]
     pub(crate) behind: bool,
     /// The cover is, or holds, a custom element whose closed shadow root this world does not
@@ -520,6 +526,24 @@ pub(crate) struct CoverFacts {
     #[serde(default)]
     pub(crate) notice: bool,
     pub(crate) kind: CoverKind,
+}
+
+impl CoverFacts {
+    /// Every element the facts name, each once: the cover, its controls, and the control a
+    /// `labels` cover is.
+    pub(crate) fn pins(&self) -> Vec<Pin> {
+        let labelled = match self.kind {
+            CoverKind::Labels { pin } => Some(pin),
+            _ => None,
+        };
+        let mut pins = vec![self.pin];
+        for pin in self.controls.iter().copied().chain(labelled) {
+            if !pins.contains(&pin) {
+                pins.push(pin);
+            }
+        }
+        pins
+    }
 }
 
 /// Each added read phase is measured separately so a large document cannot hide the hit budget.
@@ -572,6 +596,18 @@ pub(crate) struct PinnedLayer {
     pub(crate) holders: Vec<Pin>,
 }
 
+/// What a strict-mode violation the page decided was written from (`strictModeViolationError`):
+/// the chunk's locator text, how many elements matched, and the first ten of them pinned with
+/// their lines, in order.
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct StrictListing {
+    pub(crate) locator: String,
+    pub(crate) count: u32,
+    pub(crate) pins: Vec<Pin>,
+    pub(crate) items: Vec<PinPreview>,
+}
+
 /// One match of a `stage`: a pinned element, or the Document when `nth` or `internal:or` kept
 /// the chunk's query root.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, TS)]
@@ -585,7 +621,7 @@ pub(crate) enum StageMatch {
 /// `generateSelectorSimple` writes, as `asLocator` prints it. The page masks both as it masks
 /// any failure output; they are still page text, so `Debug` prints their lengths, as the engine's
 /// `StrictPreview` of the same two strings does.
-#[derive(Clone, PartialEq, Eq, Deserialize, TS)]
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct PinPreview {
     pub(crate) preview: String,
@@ -601,7 +637,8 @@ impl fmt::Debug for PinPreview {
     }
 }
 
-/// One control of a cover that takes the pointer.
+/// One control of a layer that takes the pointer, as the page worded it in the engine snapshot's
+/// survey (`SurveyLayer`), a reply only the `snapshot` request sends.
 #[derive(Debug, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CoverControl {
@@ -642,8 +679,9 @@ pub(crate) enum CoverKind {
     },
     /// The control's own wrapper or drawing takes the pointer.
     Wrapper,
-    /// The control is a label for the control on top, whose ref this is.
-    Labels { r#ref: String },
+    /// The control is a label for the control on top, pinned with the facts: Rust names it, and
+    /// the answer's line prints its ref.
+    Labels { pin: Pin },
     /// What is on top is a far ancestor or the page's root: nothing covers it.
     Nothing,
     /// A parent with `overflow: hidden` or `clip` clips the click point away.

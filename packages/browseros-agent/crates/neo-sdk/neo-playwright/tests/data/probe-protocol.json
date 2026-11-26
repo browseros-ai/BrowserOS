@@ -1,5 +1,5 @@
 {
-  "protocol": 54,
+  "protocol": 56,
   "callFunction": "function (call, root, ...nodes) { const probe = globalThis.__neoProbe; return probe ? probe.call(call, root ?? this, nodes) : call?.request?.op === \"pinned\" ? { kind: \"uninstalled\" } : '{\"kind\":\"uninstalled\"}'; }",
   "replyKinds": {
     "describe": [
@@ -122,6 +122,9 @@
     ],
     "privateMarks": [
       "marks"
+    ],
+    "openClosedRoots": [
+      "value"
     ]
   },
   "byHandle": [
@@ -584,7 +587,8 @@
         "cut": true,
         "keys": false,
         "frameVisible": true,
-        "scroll": "centre"
+        "scroll": "centre",
+        "name": "Password"
       }
     },
     {
@@ -732,6 +736,24 @@
     {
       "op": "read",
       "target": {
+        "set": {
+          "members": [
+            {
+              "pin": 1
+            }
+          ],
+          "staleRef": "e9"
+        }
+      },
+      "strictness": "firstMatch",
+      "frameVisible": true,
+      "read": {
+        "kind": "textContent"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
         "chunk": {
           "parts": [
             {
@@ -778,6 +800,17 @@
       "frameVisible": true,
       "read": {
         "kind": "checkable"
+      }
+    },
+    {
+      "op": "read",
+      "target": {
+        "pin": 3
+      },
+      "strictness": "strict",
+      "frameVisible": true,
+      "read": {
+        "kind": "validityInvalid"
       }
     },
     {
@@ -1512,6 +1545,9 @@
       "op": "privateMarks"
     },
     {
+      "op": "openClosedRoots"
+    },
+    {
       "op": "setContent",
       "html": "<!doctype html><title>Set</title><p>new</p>"
     }
@@ -1519,19 +1555,19 @@
   "replies": [
     {
       "kind": "described",
-      "protocol": 54,
+      "protocol": 56,
       "seq": 0,
       "url": "https://example.com/"
     },
     {
       "kind": "described",
-      "protocol": 54,
+      "protocol": 56,
       "seq": 347,
       "url": "https://pay.example/frame"
     },
     {
       "kind": "described",
-      "protocol": 54,
+      "protocol": 56,
       "seq": 512340,
       "url": "https://example.com/",
       "retired": 0
@@ -1737,23 +1773,13 @@
       "kind": "cover",
       "facts": {
         "layer": 5,
-        "ref": "e7",
-        "role": "dialog",
-        "name": "Sign in",
+        "pin": 7,
         "markup": "<div role=\"dialog\" class=\"modal\">…</div>",
-        "snapshot": {
-          "role": "dialog",
-          "name": "Sign in",
-          "ref": "e7",
-          "children": []
-        },
+        "text": "Sign in Close",
         "controls": [
-          {
-            "role": "button",
-            "name": "Close",
-            "ref": "e9"
-          }
+          9
         ],
+        "surrounds": false,
         "blank": false,
         "behind": false,
         "closed": false,
@@ -1767,15 +1793,11 @@
       "kind": "cover",
       "facts": {
         "layer": 5,
-        "ref": "n4",
-        "role": "textbox",
-        "name": "",
+        "pin": 4,
         "markup": "<div role=\"textbox\" id=\"modal-wrapper\">…</div>",
-        "snapshot": {
-          "role": "textbox"
-        },
         "text": "Resale prices often exceed face value.",
         "controls": [],
+        "surrounds": false,
         "blank": false,
         "behind": false,
         "closed": false,
@@ -1793,12 +1815,10 @@
       "kind": "cover",
       "facts": {
         "layer": 5,
-        "ref": "e12",
-        "role": "generic",
-        "name": "",
+        "pin": 12,
         "markup": "<label for=\"terms\">…</label>",
-        "snapshot": null,
         "controls": [],
+        "surrounds": true,
         "blank": false,
         "behind": false,
         "closed": false,
@@ -1810,6 +1830,24 @@
             "x": 4,
             "y": 9
           }
+        }
+      }
+    },
+    {
+      "kind": "cover",
+      "facts": {
+        "layer": 6,
+        "pin": 3,
+        "markup": "<input id=\"email\">",
+        "controls": [],
+        "surrounds": false,
+        "blank": false,
+        "behind": false,
+        "closed": false,
+        "notice": false,
+        "kind": {
+          "is": "labels",
+          "pin": 3
         }
       }
     },

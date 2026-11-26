@@ -33,7 +33,7 @@ import type {
   StageRequest,
   StageSet,
 } from './protocol'
-import { checkEngines } from './resolve'
+import { checkEngines, strictViolation } from './resolve'
 import { engineTable, ProbeError, type QueryEngine, type World } from './world'
 
 /**
@@ -201,11 +201,7 @@ export function stage(
     for (const name of scopedEngines.keys()) engines.delete(name)
   }
   if (request.strict && elements.length > 1)
-    return {
-      kind: 'strict',
-      message: injected.strictModeViolationError(request.strict, elements)
-        .message,
-    }
+    return strictViolation(world, request.strict, elements)
   const [staleRef] = reached
   return {
     kind: 'staged',

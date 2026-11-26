@@ -14,8 +14,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD;
 use browseros_core::{TabId, TargetId};
 use neo_snapshot::{AriaNode, Call, Form, MaxTokens, Passed, Snapshot, TextForm};
+use neo_snapshot_apc::AnnotatedPageContent;
+use neo_snapshot_apc::refs::TabRefTable;
+use neo_snapshot_apc::tree::{
+    ApcBuilder, AriaAsk, BuildOptions, DocSeq, DocToken, FrameToken, NodeBuilder, SnapshotTree,
+};
+use prost::Message as _;
 use serde_json::{Value, json};
 use tokio::time::{self, Instant};
 
@@ -32,30 +40,84 @@ type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 /// The whole bound of an op's event wait (`EVENTS_BEFORE_REPLY`).
 const WAIT: Duration = Duration::from_secs(2);
 
-/// The tree every scripted frame answers: a main section with one button.
-fn tree() -> Value {
-    json!([{ "role": "main", "ref": "e2",
-        "children": [{ "role": "button", "name": "Go", "ref": "e3" }] }])
+/// The page every scripted capture holds: a main section with one button.
+fn apc() -> AnnotatedPageContent {
+    ApcBuilder::new("doc-main")
+        .main_url("https://a.test/")
+        .root(
+            NodeBuilder::root().child(
+                NodeBuilder::element("main")
+                    .dom_id(2)
+                    .bounding_box(0, 0, 400, 300)
+                    .child(
+                        NodeBuilder::button("Go")
+                            .dom_id(3)
+                            .bounding_box(10, 10, 80, 20),
+                    ),
+            ),
+        )
+        .build()
 }
 
-/// The text `render` prints for [`tree`] by `call`: what the op must answer.
-fn printed(call: Call<'_>) -> TestResult<String> {
-    let tree: Vec<AriaNode> = serde_json::from_value(tree())?;
+/// [`apc`]'s tree as a tab that was opened under this instance first emits it, in ai mode (with
+/// the refs its fresh ref table prints) or in Playwright's default: the nodes the op answers.
+fn tree_in(ai: bool) -> TestResult<Vec<AriaNode>> {
+    let seq_of = |_: &DocToken, _: Option<&FrameToken>| DocSeq::new(0);
+    let built = SnapshotTree::build(apc(), BuildOptions::new().with_seq_of(&seq_of))?;
+    let mut refs = TabRefTable::new();
+    let ask = if ai {
+        AriaAsk::ai(&mut refs)
+    } else {
+        AriaAsk::default_mode()
+    };
+    Ok(built.aria(ask)?.into_snapshot().tree)
+}
+
+/// [`tree_in`] in ai mode, which every row asks for unless it says otherwise.
+fn tree() -> TestResult<Vec<AriaNode>> {
+    tree_in(true)
+}
+
+/// The text `render` prints by `call` for the tree of `ai` mode: what the op must answer.
+fn printed_in(ai: bool, call: Call<'_>) -> TestResult<String> {
     let snapshot = Snapshot {
-        tree,
+        tree: tree_in(ai)?,
         ..Snapshot::default()
     };
     Ok(neo_snapshot::render(&snapshot, call).into_text())
 }
 
-/// One tab whose main frame answers [`tree`], after `after`, or with the probe's internal error.
+/// [`printed_in`] for an ai-mode tree.
+fn printed(call: Call<'_>) -> TestResult<String> {
+    printed_in(true, call)
+}
+
+/// One tab whose captures answer [`apc`], after `after`, or with the browser's internal error.
 #[derive(Default)]
 struct OneMain {
     after: Duration,
     broken: bool,
-    /// Snapshot requests the frame answered: one per read of the page.
+    /// Captures the tab answered: one per read of the page.
     reads: AtomicUsize,
     seq: AtomicU64,
+    /// The page's cover survey throws, as on a page shape it never foresaw.
+    survey_throws: bool,
+    /// How many of the page's body checks come before its body is parsed, as behind a
+    /// parser-blocking script.
+    bodyless: usize,
+    /// Body checks the page answered.
+    body_checks: AtomicUsize,
+    /// Worlds installed in the page: its `Page.createIsolatedWorld` calls.
+    installs: AtomicUsize,
+    /// The first world installed in the page is gone, as the cached main world is after a
+    /// cross-document navigation: its body checks fail as Chromium fails a call on a released
+    /// handle, while a world installed after it answers.
+    first_world_gone: bool,
+    /// How long the page takes to answer a capture's proof of its world: a renderer that hangs
+    /// once its world is installed answers none in time.
+    proof_after: Duration,
+    /// Proofs the page was asked for: its `describe` probe requests.
+    describes: AtomicUsize,
 }
 
 impl TabScript for OneMain {
@@ -65,30 +127,70 @@ impl TabScript for OneMain {
         {
             self.seq.store(seq, Ordering::SeqCst);
         }
-        // Clickable marking reads an empty, checked document.
-        (method == "DOMSnapshot.captureSnapshot")
-            .then(|| json!({ "documents": [{}], "strings": [] }))
+        if method == "Page.createIsolatedWorld" {
+            self.installs.fetch_add(1, Ordering::SeqCst);
+        }
+        match method {
+            // A tab opened under this instance: no private marks to read before a snapshot.
+            "Target.getTargets" => Some(json!({ "targetInfos": [] })),
+            "Page.getAnnotatedPageContent" => {
+                self.reads.fetch_add(1, Ordering::SeqCst);
+                Some(json!({ "content": STANDARD.encode(apc().encode_to_vec()) }))
+            }
+            // The pinned main section's node, for a locator's snapshot.
+            "Runtime.callFunctionOn" if params["arguments"][0]["value"].is_array() => Some(json!({
+                "result": { "type": "object", "deepSerializedValue": { "type": "array",
+                    "value": [{ "type": "node", "value": { "backendNodeId": 2 } }] } }
+            })),
+            _ => None,
+        }
+    }
+
+    fn body_parsed(&self) -> bool {
+        self.body_checks.fetch_add(1, Ordering::SeqCst) >= self.bodyless
+    }
+
+    fn cdp_error(&self, method: &str, params: &Value) -> Option<&'static str> {
+        let body_check = method == "Runtime.callFunctionOn"
+            && params["functionDeclaration"]
+                .as_str()
+                .is_some_and(|function| function.contains("document.body !== null"));
+        if body_check && self.first_world_gone && self.installs.load(Ordering::SeqCst) <= 1 {
+            return Some("Could not find object with given id");
+        }
+        (self.broken && method == "Page.getAnnotatedPageContent")
+            .then_some("the scripted browser could not read the page")
+    }
+
+    fn delay(&self, method: &str, _params: &Value) -> Duration {
+        if method == "Page.getAnnotatedPageContent" {
+            self.after
+        } else {
+            Duration::ZERO
+        }
     }
 
     fn probe(&self, _frame: &str, request: &Value) -> ProbeAnswer {
         match request["op"].as_str() {
-            Some("snapshot") => {
-                self.reads.fetch_add(1, Ordering::SeqCst);
-                if self.broken {
-                    return ProbeAnswer::unexpected();
-                }
+            Some("describe") => {
+                self.describes.fetch_add(1, Ordering::SeqCst);
+                let answer = ProbeAnswer::reply(json!({ "kind": "described",
+                    "protocol": PROBE_PROTOCOL, "seq": self.seq.load(Ordering::SeqCst),
+                    "url": "https://a.test/" }));
                 ProbeAnswer {
-                    after: self.after,
-                    reply: Ok(json!({ "kind": "snapshot", "json": tree(), "iframes": [] })),
+                    after: self.proof_after,
+                    ..answer
                 }
             }
-            Some("describe") => ProbeAnswer::reply(json!({ "kind": "described",
-                "protocol": PROBE_PROTOCOL, "seq": self.seq.load(Ordering::SeqCst),
-                "url": "https://a.test/" })),
             Some("read") => ProbeAnswer::reply(json!({ "kind": "read", "value": true })),
             Some("resolve") => ProbeAnswer::reply(
                 json!({ "kind": "element", "pin": 1, "preview": "<main></main>" }),
             ),
+            Some("coverSurvey") if self.survey_throws => ProbeAnswer::reply(json!({
+                "kind": "error", "class": "internal", "message": "unforeseen survey shape" })),
+            Some("coverSurvey") => ProbeAnswer::reply(json!({ "kind": "surveyed", "layers": [],
+                "tested": 0, "surveyMs": 0.0, "phases": { "hits": 0.0, "count": 0.0,
+                "naming": 0.0, "linking": 0.0, "marks": 0.0, "stopped": false } })),
             _ => ProbeAnswer::unexpected(),
         }
     }
@@ -196,7 +298,7 @@ async fn tests_that_a_format_answers_rusts_text_and_no_format_the_tree() -> Test
         ),
         (
             json!({ "mode": "default", "format": "playwright" }),
-            printed(Call::Playwright)?,
+            printed_in(false, Call::Playwright)?,
         ),
         (
             json!({ "mode": "ai", "format": "playwright" }),
@@ -225,7 +327,7 @@ async fn tests_that_a_format_answers_rusts_text_and_no_format_the_tree() -> Test
         ),
         (
             json!({ "mode": "default", "format": "playwright" }),
-            printed(Call::Playwright)?,
+            printed_in(false, Call::Playwright)?,
         ),
     ] {
         let answer = run
@@ -242,9 +344,138 @@ async fn tests_that_a_format_answers_rusts_text_and_no_format_the_tree() -> Test
             page_input(&run, 0, &json!({ "mode": "ai", "clickable": true })),
         )
         .await?;
-    assert_eq!(tree_path["json"], tree(), "no format: the tree, as before");
+    assert_eq!(
+        tree_path["json"],
+        json!(tree()?),
+        "no format: the tree, as before"
+    );
     assert!(tree_path.get("document").is_some() && tree_path.get("snapshotCall").is_some());
     assert!(tree_path.get("snapshot").is_none());
+    Ok(())
+}
+
+/// The `# on top:` survey is best effort: a survey the page throws in leaves a whole page's
+/// snapshot as it is without one, and the call log says it was skipped.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_snapshot_returns_without_on_top_lines_when_the_survey_throws() -> TestResult {
+    let tab = ScriptedTab::new(OneMain {
+        survey_throws: true,
+        ..OneMain::default()
+    });
+    let run = ScriptedRun::over(&tab).await?;
+    let answer = run
+        .playwright
+        .invoke(
+            &run.env,
+            op("page.ariaSnapshot")?,
+            page_input(&run, 0, &json!({ "mode": "ai", "format": { "neo": {} } })),
+        )
+        .await?;
+    assert_eq!(
+        answer,
+        json!({ "snapshot": printed(Call::Page(&Passed::default()))? })
+    );
+    Ok(())
+}
+
+/// A main document still parsing towards its body is asked again until the body is there, as
+/// upstream polls the main frame for `body,frameset`, and only then read, rather than answered
+/// as an empty page.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_page_without_its_body_yet_is_read_once_it_has_one() -> TestResult {
+    let tab = ScriptedTab::new(OneMain {
+        bodyless: 2,
+        ..OneMain::default()
+    });
+    let run = ScriptedRun::over(&tab).await?;
+    let answer = run
+        .playwright
+        .invoke(
+            &run.env,
+            op("page.ariaSnapshot")?,
+            page_input(&run, 0, &json!({ "mode": "ai", "format": { "neo": {} } })),
+        )
+        .await?;
+    assert_eq!(
+        answer,
+        json!({ "snapshot": printed(Call::Page(&Passed::default()))? })
+    );
+    assert_eq!(
+        tab.script().body_checks.load(Ordering::SeqCst),
+        3,
+        "two checks without a body, then one with it"
+    );
+    assert_eq!(
+        tab.script().reads.load(Ordering::SeqCst),
+        1,
+        "the page is captured once it has its body"
+    );
+    Ok(())
+}
+
+/// A body check whose cached main world went away under a cross-document navigation drops that
+/// world, so the next attempt installs one in the new document and reads it, rather than asking
+/// the gone one until the op times out.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_body_check_in_a_gone_world_reads_the_page_in_a_new_one() -> TestResult {
+    let tab = ScriptedTab::new(OneMain {
+        first_world_gone: true,
+        ..OneMain::default()
+    });
+    let run = ScriptedRun::over(&tab).await?;
+    let answer = run
+        .playwright
+        .invoke(
+            &run.env,
+            op("page.ariaSnapshot")?,
+            page_input(
+                &run,
+                5_000,
+                &json!({ "mode": "ai", "format": { "neo": {} } }),
+            ),
+        )
+        .await?;
+    // Dropping the world retired its document's refs, as a navigation does, so the new world's
+    // refs carry a frame prefix.
+    assert_eq!(
+        answer,
+        json!({ "snapshot": "- main [ref=f1e1]:\n  - text: Go" })
+    );
+    assert_eq!(tab.script().installs.load(Ordering::SeqCst), 2);
+    Ok(())
+}
+
+/// A frame whose renderer hangs makes the browser wait its 2 s subframe deadline before the
+/// capture's reply, and the proof of that frame's cached world then gets no answer either. The
+/// proofs share the capture's budget, counted from its request, so the page is read in about
+/// the browser's own wait, not that wait twice.
+#[tokio::test(start_paused = true)]
+async fn tests_that_a_hung_worlds_proof_does_not_stack_on_the_captures_wait() -> TestResult {
+    let tab = ScriptedTab::new(OneMain {
+        after: Duration::from_secs(2),
+        proof_after: Duration::from_secs(10),
+        ..OneMain::default()
+    });
+    let run = ScriptedRun::over(&tab).await?;
+    let started = Instant::now();
+    let answer = run
+        .playwright
+        .invoke(
+            &run.env,
+            op("page.ariaSnapshotJSON")?,
+            json!({ "page": run.page, "mode": "ai" }),
+        )
+        .await?;
+    let took = started.elapsed();
+    assert_eq!(answer, json!({ "snapshot": tree()? }));
+    assert!(
+        tab.script().describes.load(Ordering::SeqCst) >= 1,
+        "the cached main world was asked to prove itself"
+    );
+    assert!(
+        took < Duration::from_millis(2_600),
+        "the proof stacked on the capture's wait: {took:?}"
+    );
     Ok(())
 }
 
@@ -260,7 +491,7 @@ async fn tests_that_the_json_ops_answer_the_tree_unmarked() -> TestResult {
             json!({ "page": run.page, "mode": "ai" }),
         )
         .await?;
-    assert_eq!(answer, json!({ "snapshot": tree() }));
+    assert_eq!(answer, json!({ "snapshot": tree()? }));
     let answer = run
         .playwright
         .invoke(
@@ -269,7 +500,7 @@ async fn tests_that_the_json_ops_answer_the_tree_unmarked() -> TestResult {
             locator_input(&run, &json!({ "mode": "default" })),
         )
         .await?;
-    assert_eq!(answer, json!({ "snapshot": tree() }));
+    assert_eq!(answer, json!({ "snapshot": tree_in(false)? }));
     assert_eq!(
         tab.sent("DOMSnapshot.captureSnapshot"),
         0,
@@ -645,7 +876,7 @@ async fn tests_that_compare_answers_the_tree_and_rusts_text_from_one_read() -> T
         )
         .await?;
     assert_eq!(tab.script().reads.load(Ordering::SeqCst), 1, "one read");
-    assert_eq!(answer["json"], tree());
+    assert_eq!(answer["json"], json!(tree()?));
     assert!(answer.get("document").is_some() && answer.get("snapshotCall").is_some());
     let text = printed(Call::Page(&Passed::default()))?;
     assert_eq!(
@@ -666,7 +897,7 @@ async fn tests_that_compare_answers_the_tree_and_rusts_text_from_one_read() -> T
             ),
         )
         .await?;
-    assert_eq!(answer["json"], tree());
+    assert_eq!(answer["json"], json!(tree()?));
     assert_eq!(
         answer["rust"],
         json!({ "snapshot": printed(Call::Element(&Passed::default()))? }),
@@ -715,7 +946,7 @@ impl Page {
         let document = store.generation(&tab);
         Ok(Self {
             snapshot: Snapshot {
-                tree: serde_json::from_value(tree())?,
+                tree: tree()?,
                 ..Snapshot::default()
             },
             store,
@@ -999,7 +1230,7 @@ async fn tests_that_a_delta_through_the_op_compares_with_the_stored_text() -> Te
         answer["rust"]["snapshot"],
         json!("# no change since your last snapshot of this tab")
     );
-    assert_eq!(answer["json"], tree());
+    assert_eq!(answer["json"], json!(tree()?));
     compared
         .run_state()
         .settle_snapshot_baselines(true, &|_| true);

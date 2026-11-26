@@ -36,6 +36,7 @@ mod chunk_plan;
 mod js_regex;
 mod parsed_selector;
 mod ref_resolver;
+mod role_aka;
 mod role_match;
 mod role_query;
 mod tree_matches;
@@ -53,6 +54,7 @@ pub use parsed_selector::{
     SelectorPart,
 };
 pub use ref_resolver::RefResolver;
+pub use role_aka::role_aka;
 pub use role_query::{RoleQuery, RoleQueryError, StringMatchOperator, TextFilter};
-pub use tree_matches::{StrictPreview, StrictViolation, TreeMatches};
+pub use tree_matches::{StrictPreview, StrictViolation, TreeMatches, strict_message};
 pub use tree_stage::{NotTreeStage, Scope, TreeStage, TreeStageError};

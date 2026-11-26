@@ -5,13 +5,14 @@ use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 use ts_rs::TS;
 
+use crate::backoff::Backoff;
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, TARGET};
 use crate::page::OpPage;
 use crate::probe::{
-    PageText, ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read, ReadAll, Rect,
+    PageText, ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read, ReadAll, Rect, Want,
 };
 use crate::read::element_read::Visibility;
 use crate::read::element_wait::ElementWait;
@@ -19,10 +20,10 @@ use crate::read::selector_wait::{Returning, SelectorState};
 use crate::read::{
     element_handle, element_read, element_wait, normalize, selector_wait, viewport_box,
 };
-use crate::resolve::{Landed, Resolver};
+use crate::resolve::{self, HandleSite, Landed, Resolver};
 use crate::target::{RootHandle, Strictness, Target};
 use crate::wire::{self, Describe, OpWire, Route, Run, options};
-use crate::{ErrorCode, Playwright, PlaywrightError};
+use crate::{ErrorCode, Playwright, PlaywrightError, snapshot};
 
 listed_enum! {
     /// Reads of one element or of every match. The locator, page, frame and element-handle
@@ -381,27 +382,75 @@ async fn input_value(
     element(pw, scope, input, Read::InputValue).await
 }
 
-/// Resolution and minting use one probe read, so a rerender cannot swap the checked node
-/// between a locator query and the identity that the host keeps for its later run.
+/// `locator.ref()` and `elementHandle.ref()`: the element's ref in the tab's ref table (the one
+/// a snapshot printed, else one minted), read from a capture taken after the element was pinned,
+/// so the ref names the node the locator matched even if the page rerenders since.
 async fn element_ref(
     pw: &Playwright,
     scope: &OpScope<'_>,
     input: ElementInput,
 ) -> Result<String, PlaywrightError> {
-    let reference = element(
-        pw,
-        scope,
-        ElementInput {
-            strict: Strictness::Strict,
-            ..input
-        },
-        Read::Ref,
-    )
-    .await?;
+    let reference = match scope.within(poll_ref(pw, scope, &input.target)).await {
+        Ok(reference) => reference?,
+        Err(_expired) => return Err(scope.timed_out(ErrorCode::NoMatch)),
+    };
     if let Some(tab) = scope.admitted_tab() {
         scope.run_state().opened_tabs.refs_issued(tab);
     }
     Ok(reference)
+}
+
+/// [`element_ref`]'s attempts: the element pinned strictly, then its ref from the tree. A handle
+/// is found once; a locator again on every attempt, until the op's deadline.
+async fn poll_ref(
+    pw: &Playwright,
+    scope: &OpScope<'_>,
+    target: &Target,
+) -> Result<String, PlaywrightError> {
+    let pin_strictly = |target| ProbeRequest::Resolve {
+        target,
+        strictness: Strictness::Strict,
+        want: Want::Element,
+    };
+    match target {
+        Target::Locator(locator) => {
+            let page = OpPage::admit_handle(pw, scope, &locator.page).await?;
+            let resolver = Resolver::new(&page, scope, locator, Strictness::Strict);
+            scope.log(format!("waiting for {}", locator.display));
+            let backoff = Backoff::outer(scope.timeout());
+            for attempt in 0.. {
+                if scope.sleep(backoff.wait(attempt)).await.is_err() {
+                    break;
+                }
+                let request = |target, _frame_visible| pin_strictly(target);
+                let Some(Landed { reply, world, .. }) = resolver.attempt_at(request).await? else {
+                    continue;
+                };
+                let pin = match reply {
+                    ProbeReply::Element { pin, .. } => pin,
+                    ProbeReply::None { stale_ref: None } | ProbeReply::Detached => continue,
+                    other => return Err(resolver.refused(other)),
+                };
+                if let Some(reference) = snapshot::element_ref(scope, &page, &world, pin).await? {
+                    return Ok(reference);
+                }
+            }
+            Err(scope.timed_out(ErrorCode::NoMatch))
+        }
+        Target::Element(handle) => {
+            let page = OpPage::admit_handle(pw, scope, &handle.page).await?;
+            let Some(site) = HandleSite::find(&page, scope, handle).await? else {
+                return Err(resolve::handle_detached(scope));
+            };
+            let reply = site.call(&pin_strictly(ProbeTarget::Root)).await?;
+            let ProbeReply::Element { pin, .. } = reply else {
+                return Err(resolve::handle_detached(scope));
+            };
+            snapshot::element_ref(scope, &page, site.world(), pin)
+                .await?
+                .ok_or_else(|| resolve::handle_detached(scope))
+        }
+    }
 }
 
 async fn is_enabled(
@@ -636,10 +685,12 @@ async fn every_match(
     };
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, target, Strictness::FirstMatch);
-    let request = |last, _| ProbeRequest::ReadAll {
-        target: ProbeTarget::Chunk(last),
-        read,
+    let resolver = if read == ReadAll::Count {
+        resolver.counting()
+    } else {
+        resolver
     };
+    let request = |target, _| ProbeRequest::ReadAll { target, read };
     let Some(Landed { reply, .. }) = resolver.attempt_at(request).await? else {
         return Ok(Matched::default());
     };

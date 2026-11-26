@@ -1,5 +1,6 @@
-//! Reads a loaded page's oracle: Playwright's ARIA engine (neo-playwright's injected.js,
-//! unchanged) run over every frame of the page, in a world of its own per frame.
+//! Reads a loaded page's oracle: Playwright's ARIA engine (the test-only oracle bundle,
+//! `tests/data/oracle-injected.js`, which keeps the vendored engine neo-playwright's shipped
+//! bundle swaps for stand-ins) run over every frame of the page, in a world of its own per frame.
 //!
 //! ```text
 //!  frames:  main session's Page.getFrameTree  (same-process frames)
@@ -29,8 +30,10 @@ use tokio::time;
 
 use crate::oracle::{self, Oracle, OracleAria, OracleElement, OracleFrame, OracleStates};
 
-/// neo-playwright's probe bundle: Playwright's injected engine plus Neo's probe, as Neo ships it.
-const INJECTED_JS: &str = include_str!("../../../neo-playwright/assets/injected.js");
+/// Neo's probe with Playwright's own injected engine, roles and ARIA snapshot included, as
+/// `neo-playwright-js/scripts/build.ts` writes it for the differential tests (the bundle Neo
+/// ships has stand-ins in their place since the switch-over).
+const INJECTED_JS: &str = include_str!("../data/oracle-injected.js");
 
 /// The reader spliced into [`INJECTED_JS`] (see that file's header).
 const ORACLE_JS: &str = include_str!("oracle.js");

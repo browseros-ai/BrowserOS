@@ -29,7 +29,9 @@ use std::num::NonZeroU32;
 use browseros_cdp::CdpError;
 use browseros_core::{CoreError, FrameId};
 use neo_snapshot_apc::refs::{Ref, RefKind, RefLookup, RefTarget};
-use neo_snapshot_apc::tree::{DocSeq, DocToken, DomNodeId, NodeKey, SnapshotTree};
+use neo_snapshot_apc::tree::{
+    DocId, DocSeq, DocToken, DomNodeId, NodeKey, SnapshotTree, TreeDoc, TreeNode,
+};
 use serde::Deserialize;
 use serde_json::json;
 
@@ -38,9 +40,25 @@ use crate::page::OpPage;
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want};
 use crate::resolve::{self, FramePath, FrameStart, Started};
 use crate::target::{AriaRefJump, AriaRefKind, Strictness};
-use crate::tree::{AttemptStart, CapturedTree, TabTree};
-use crate::world::{DocLookup, FrameSeq, IsolatedWorld, Pin, Place};
+#[cfg(test)]
+use crate::tree::CapturedTree;
+use crate::tree::{AttemptStart, TabTree};
+use crate::world::{DocLookup, FrameSeq, IsolatedWorld, Pin, Place, SeqLookup};
 use crate::{ErrorCode, PlaywrightError};
+
+/// Where a ref jump landed (design 6.4).
+pub(crate) enum RefLanding {
+    /// The ref's element, pinned in its document's proven world.
+    Node(HydratedNode),
+    /// The ref's document is live in its proven `world`, but the element left it: the stale ref
+    /// the page's own ref engine answered as `none` with `staleRef`, which each op still decides
+    /// on (a read of every match counts nothing, a wait for `detached` is met, any other op
+    /// fails `element_detached`).
+    Left {
+        world: IsolatedWorld,
+        path: FramePath,
+    },
+}
 
 /// An APC [`NodeKey`] hydrated into a proven isolated world and pinned element handle.
 pub(crate) struct HydratedNode {
@@ -120,9 +138,12 @@ pub(super) enum ObjectPin {
     Refused(ProbeReply),
 }
 
-enum EnsuredWorld {
+/// Whether a frame's world could be installed: [`ensure_world`]'s answer.
+pub(super) enum EnsuredWorld {
     Ready(IsolatedWorld),
+    /// A world on the way went away under the install; another try installs afresh.
     Gone,
+    /// The frame is not in the page any more.
     Missing,
 }
 
@@ -152,6 +173,7 @@ impl<'a> Hydrate<'a> {
 
     /// Hydrates `key` (expected in `frame`) against `capture`, applying all four cases of design
     /// section 6.2 so a backend node ID is never resolved into an unproven or replaced document.
+    #[cfg(test)]
     pub(crate) async fn hydrate_key(
         &self,
         capture: &CapturedTree,
@@ -207,10 +229,8 @@ impl<'a> Hydrate<'a> {
     /// - Retired ref or retired/foreign seq: fails `ErrorCode::ElementDetached` with zero captures.
     /// - Unknown ref on a never-issued or live seq: fails `ErrorCode::InvalidInput` with zero
     ///   captures.
-    pub(crate) async fn hydrate_ref(
-        &self,
-        jump: AriaRefJump,
-    ) -> Result<HydratedNode, PlaywrightError> {
+    /// - An element that left its live document lands as [`RefLanding::Left`].
+    pub(crate) async fn land_ref(&self, jump: AriaRefJump) -> Result<RefLanding, PlaywrightError> {
         let Some(target_ref) = jump_ref(jump) else {
             return Err(unknown_ref(self.scope, jump));
         };
@@ -222,9 +242,18 @@ impl<'a> Hydrate<'a> {
             RefLookup::Unknown => {
                 return match self.page.frames().lookup_doc_seq(jump.seq) {
                     DocLookup::Retired => Err(detached_ref(self.scope, jump)),
-                    DocLookup::Bound { .. } | DocLookup::Reserved { .. } | DocLookup::Unknown => {
-                        Err(unknown_ref(self.scope, jump))
+                    // A seq a live document holds, under which no snapshot printed this ref:
+                    // the element is not on the page, as the page's own ref map answered before
+                    // the switch-over. Only a seq the page never issued is no ref at all.
+                    DocLookup::Bound { .. } | DocLookup::Reserved { .. } => {
+                        Err(detached_ref(self.scope, jump))
                     }
+                    DocLookup::Unknown => match self.page.frames().by_seq(jump.seq) {
+                        SeqLookup::Live { .. } | SeqLookup::Retired => {
+                            Err(detached_ref(self.scope, jump))
+                        }
+                        SeqLookup::Unknown => Err(unknown_ref(self.scope, jump)),
+                    },
                 };
             }
         };
@@ -236,30 +265,53 @@ impl<'a> Hydrate<'a> {
                 parents,
             } => {
                 // Zero-capture fast path: `world` is already proven to hold `key.doc`.
+                let path = FramePath::from_parents(parents);
                 match pin_in_world(self.scope, self.page, &world, key.node).await? {
                     PinAttempt::Pinned {
                         pin,
                         preview,
                         object_id,
-                    } => Ok(HydratedNode {
+                    } => Ok(RefLanding::Node(HydratedNode {
                         world: *world,
-                        path: FramePath::from_parents(parents),
+                        path,
                         pin,
                         preview,
                         object_id,
                         key,
                         seq,
-                    }),
+                    })),
                     PinAttempt::WorldGone => {
                         self.tab_tree.invalidate_world(self.page.frames(), &world);
                         Err(detached_ref(self.scope, jump))
                     }
-                    PinAttempt::NodeDetached => Err(detached_ref(self.scope, jump)),
+                    PinAttempt::NodeDetached => Ok(RefLanding::Left {
+                        world: *world,
+                        path,
+                    }),
                 }
+            }
+            // The ref table issued this ref under the seq `DocTable` reserved for its document;
+            // any other seq means the two disagree about which document the ref names, and a
+            // ref that might name another document never hydrates.
+            DocLookup::Reserved { seq, .. } if seq != jump.seq => {
+                Err(detached_ref(self.scope, jump))
             }
             DocLookup::Reserved { frame, .. } => self.hydrate_reserved_ref(jump, key, frame).await,
             DocLookup::Retired => Err(detached_ref(self.scope, jump)),
             DocLookup::Unknown => Err(unknown_ref(self.scope, jump)),
+        }
+    }
+
+    /// [`Self::land_ref`] for a caller that needs the element: one that left fails
+    /// `element_detached`.
+    #[cfg(test)]
+    pub(crate) async fn hydrate_ref(
+        &self,
+        jump: AriaRefJump,
+    ) -> Result<HydratedNode, PlaywrightError> {
+        match self.land_ref(jump).await? {
+            RefLanding::Node(node) => Ok(node),
+            RefLanding::Left { .. } => Err(detached_ref(self.scope, jump)),
         }
     }
 
@@ -270,7 +322,7 @@ impl<'a> Hydrate<'a> {
         jump: AriaRefJump,
         key: NodeKey,
         frame: Option<FrameId>,
-    ) -> Result<HydratedNode, PlaywrightError> {
+    ) -> Result<RefLanding, PlaywrightError> {
         let Some(frame) = frame else {
             let _ = self.tab_tree.retire_doc(self.page.frames(), &key.doc);
             return Err(detached_ref(self.scope, jump));
@@ -280,16 +332,24 @@ impl<'a> Hydrate<'a> {
         // retiring `key.doc` until a missing frame or Case 4 recapture proves it gone.
         let mut ensured = None;
         for _ in 0..2 {
-            match ensure_world(self.page, self.scope, self.tab_tree, &frame).await? {
-                EnsuredWorld::Ready(world) => {
+            match ensure_world(self.page, self.scope, self.tab_tree, &frame).await {
+                Ok(EnsuredWorld::Ready(world)) => {
                     ensured = Some(world);
                     break;
                 }
-                EnsuredWorld::Gone => {}
-                EnsuredWorld::Missing => {
+                Ok(EnsuredWorld::Gone) => {}
+                Ok(EnsuredWorld::Missing) => {
                     let _ = self.tab_tree.retire_doc(self.page.frames(), &key.doc);
                     return Err(detached_ref(self.scope, jump));
                 }
+                // A frame tree that cannot be read (refused, or a frame's tree that never
+                // answered) cannot lead to the ref's frame: the ref is detached as far as this op
+                // can tell (ruling R63, row 6), and its document is not retired, since nothing
+                // proved it gone. The op's own timeout or cancellation stays what it is.
+                Err(error) if error.error_code() == Some(ErrorCode::Internal) => {
+                    return Err(detached_ref(self.scope, jump));
+                }
+                Err(error) => return Err(error),
             }
         }
         let Some(world) = ensured else {
@@ -304,15 +364,34 @@ impl<'a> Hydrate<'a> {
             let _ = self.tab_tree.retire_doc(self.page.frames(), &key.doc);
             return Err(detached_ref(self.scope, jump));
         }
-        match self.pin_and_bind(world, &key).await? {
-            HydrateOutcome::Hydrated(node) => Ok(*node),
+        match self.pin_and_bind(world.clone(), &key).await? {
+            HydrateOutcome::Hydrated(node) => Ok(RefLanding::Node(*node)),
             // `DocTable` refused the binding: the document retired while it was proved.
             HydrateOutcome::StaleDocument => {
                 let _ = self.tab_tree.retire_doc(self.page.frames(), &key.doc);
                 Err(detached_ref(self.scope, jump))
             }
-            HydrateOutcome::WorldStale | HydrateOutcome::NodeDetached => {
-                Err(detached_ref(self.scope, jump))
+            HydrateOutcome::WorldStale => Err(detached_ref(self.scope, jump)),
+            // The world answered after the recapture placed the document in its frame (Case 3),
+            // so it holds the document: it binds, and the element alone is gone.
+            HydrateOutcome::NodeDetached => {
+                if self
+                    .page
+                    .frames()
+                    .bind_proven_world(&key.doc, &world)
+                    .is_none()
+                {
+                    return Err(detached_ref(self.scope, jump));
+                }
+                match self.page.frames().lookup_doc(&key.doc) {
+                    DocLookup::Bound { parents, .. } => Ok(RefLanding::Left {
+                        world,
+                        path: FramePath::from_parents(parents),
+                    }),
+                    DocLookup::Reserved { .. } | DocLookup::Retired | DocLookup::Unknown => {
+                        Err(detached_ref(self.scope, jump))
+                    }
+                }
             }
         }
     }
@@ -390,6 +469,37 @@ pub(super) fn doc_matches_frame(
     }
 }
 
+/// The document `tree` places in `frame`: the main document for the main frame, else the child
+/// document whose frame token is `frame`'s id. `None` when the capture holds no document of the
+/// frame, such as a frame it could not read or one that navigated since.
+pub(crate) fn frame_doc(
+    tree: &SnapshotTree,
+    main_frame: &FrameId,
+    frame: &FrameId,
+) -> Option<DocId> {
+    tree.documents()
+        .iter()
+        .find(|doc| {
+            if doc.is_main() {
+                frame == main_frame
+            } else {
+                doc.frame_token()
+                    .is_some_and(|token| token.as_str() == frame.as_str())
+            }
+        })
+        .map(TreeDoc::id)
+}
+
+/// The frame a document of `tree` lives in: the main frame, or its frame token as a frame id.
+pub(super) fn doc_frame(doc: &TreeDoc, main_frame: &FrameId) -> Option<FrameId> {
+    if doc.is_main() {
+        Some(main_frame.clone())
+    } else {
+        doc.frame_token()
+            .map(|token| FrameId(token.as_str().to_owned()))
+    }
+}
+
 /// Resolves `node` into `world` via [`resolve_node`] and pins it with [`pin_object`], which
 /// verifies world identity (V8 refuses another world's argument), and that the element is
 /// connected to the world's own document.
@@ -425,7 +535,7 @@ async fn pin_in_world(
 /// A target crash or close stays `Cdp`, and is read first: CDP reports it as a protocol error,
 /// which would read as a detached node, or as a lost session, which would read as a world gone,
 /// and either would retry the attempt on a page that no longer exists.
-pub(super) async fn resolve_node(
+pub(crate) async fn resolve_node(
     scope: &OpScope<'_>,
     world: &IsolatedWorld,
     node: DomNodeId,
@@ -490,7 +600,7 @@ pub(super) async fn pin_object(
 
 /// Ensures an isolated world is installed for `frame`, walking down through [`FrameStart`] for
 /// child frames so ancestor parent links are recorded in `FrameWorlds`.
-async fn ensure_world(
+pub(super) async fn ensure_world(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
     tab_tree: &TabTree,
@@ -517,6 +627,74 @@ async fn ensure_world(
         }
         Started::Missing | Started::Detached => EnsuredWorld::Missing,
     })
+}
+
+/// The isolated world of `frame`, installed if this instance has none there yet (walking down from
+/// the main frame, as a frame start does): `None` when the frame is gone or a world on the way
+/// went away under the install. Best effort for callers that act on a frame only if they can.
+pub(crate) async fn ensure_frame_world(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    frame: &FrameId,
+) -> Option<IsolatedWorld> {
+    match ensure_world(page, scope, page.tree(), frame).await {
+        Ok(EnsuredWorld::Ready(world)) => Some(world),
+        Ok(EnsuredWorld::Gone | EnsuredWorld::Missing) | Err(_) => None,
+    }
+}
+
+/// Opens to the page's CSS and text engines the closed shadow roots of `doc` that the capture
+/// found (contract field 31: one seed element in each), at most `limit` of them, so a locator
+/// after a snapshot finds what it printed inside them and the probe's `privateMarks` walks them.
+/// Whether every root the capture found was handed over: a seed whose node is gone counts as
+/// handed over, a cut or a failure to resolve or to send does not, and a failure leaves the
+/// roots as they were.
+pub(crate) async fn open_closed_roots(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    world: &IsolatedWorld,
+    tree: &SnapshotTree,
+    doc: DocId,
+    limit: Option<usize>,
+) -> bool {
+    let seeds: Vec<DomNodeId> = tree
+        .doc_nodes(doc)
+        .filter(|node| node.is_closed_root_seed())
+        .filter_map(TreeNode::dom_node_id)
+        .collect();
+    if seeds.is_empty() {
+        return true;
+    }
+    let cut = limit.filter(|&limit| seeds.len() > limit);
+    if let Some(limit) = cut {
+        scope.log(format!(
+            "  closed shadow roots: a frame has {} seeds, the first {limit} sent",
+            seeds.len()
+        ));
+    }
+    let take = cut.unwrap_or(seeds.len());
+    let mut objects = Vec::with_capacity(take);
+    for seed in seeds.into_iter().take(take) {
+        match resolve_node(scope, world, seed).await {
+            Ok(Some(object)) => objects.push(object),
+            Ok(None) => {}
+            Err(_) => return false,
+        }
+    }
+    if objects.is_empty() {
+        return cut.is_none();
+    }
+    let request = ProbeRequest::OpenClosedRoots;
+    let sent = probe::call_with_nodes(scope, page, world, &request, None, &objects)
+        .await
+        .is_ok();
+    if sent {
+        scope.log(format!(
+            "  closed shadow roots opened to the page's engines: {}",
+            objects.len()
+        ));
+    }
+    sent && cut.is_none()
 }
 
 /// `website / element_detached`: the ref's document or element is gone for good.

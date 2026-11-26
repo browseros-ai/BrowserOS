@@ -45,6 +45,14 @@ impl ParsedSelector {
     }
 }
 
+impl ParsedSelector {
+    /// A selector with no parts. A `stage` that starts from a set runs it as that set alone, which
+    /// is how Rust pins the elements a tree stage matched (`ChunkRun::pinned`).
+    pub(crate) fn no_parts() -> Result<Self, serde_json::Error> {
+        value::to_raw_value(&json!({ "parts": [] })).map(Self)
+    }
+}
+
 impl Serialize for ParsedSelector {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.0.serialize(serializer)
@@ -77,6 +85,23 @@ pub(crate) enum ProbeTarget {
     /// The call's root element itself, an element handle's node ([`super::call_on`]); detached
     /// once it has left its document.
     Root,
+    /// A chunk Rust resolved over the APC tree (`resolve::tree_chunk`). The page answers it as
+    /// it would have answered the chunk: the first match, every match for a read of all, `none`
+    /// for no match (with `staleRef` when the chunk's `aria-ref` named no live node, which a read
+    /// of all leaves out, as the page's ref engine does), and `detached` once a member has left
+    /// its document. Strict mode is Rust's, decided before the request.
+    Set(ResolvedSet),
+}
+
+/// [`ProbeTarget::Set`]'s chunk, resolved: its matches in order, each pinned in this world (or
+/// the Document, which `nth` or `internal:or` can keep), and the first stale ref it reported.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct ResolvedSet {
+    pub(crate) members: Vec<SetMember>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub(crate) stale_ref: Option<String>,
 }
 
 /// The install's boot argument. The same shape is generated for the page's parser; epochs
@@ -319,6 +344,11 @@ pub(crate) enum ProbeRequest {
     /// pinned: how Rust's private-node mirror learns the marks of a document that an earlier
     /// `Playwright` filled. Answers `marks`.
     PrivateMarks,
+    /// Opens to this world's engines the closed shadow root each of the call's nodes sits in
+    /// ([`super::call_with_nodes`]): the seeds an APC capture marks (contract field 31), which
+    /// Rust hands over after a marked snapshot so CSS and text locators see what it printed
+    /// inside those roots (probe/shadow-roots.ts). Answers `value` null.
+    OpenClosedRoots,
 }
 
 /// An element, or the document, that a request names and this world already holds.
@@ -645,6 +675,10 @@ pub(crate) enum Read {
     /// What `check` and `uncheck` read around their click: `{ checked, radio }` of the element,
     /// or of the control its label names.
     Checkable,
+    /// Whether the element fails its own constraint validation (`validity.valid === false`):
+    /// what upstream's error message reads beside `aria-invalid` (`getValidityInvalid`), and a
+    /// fact the tree does not carry.
+    ValidityInvalid,
     /// The `<input>` that `setInputFiles` sets, the element or the control its label names,
     /// after upstream's checks for `multiple` files or a `directory`: `{ pin, target,
     /// takesPaths }`, the input and the element named pinned, and whether the input is

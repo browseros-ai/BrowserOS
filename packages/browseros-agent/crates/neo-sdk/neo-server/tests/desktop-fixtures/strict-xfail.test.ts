@@ -9,12 +9,27 @@ import {
 } from './model'
 import { assertExpectedFailure, matchesExpectedFailure } from './strict-xfail'
 
-const labelSnapshot = [
-  '- textbox "Email address" [ref=first]',
-  '- textbox "Wrapped name" [ref=second]',
-  '- textbox "Pointer label" [ref=third]',
-  '- text: Remember me',
+const frameSnapshot = [
+  '- heading "Snapshot frame tree fixture" [level=1]',
+  '- button "Parent action ready" [ref=e3]',
+  '- iframe [ref=e4]:',
+  '  - button "Frame A action ready" [ref=f1e2]',
+  '  - group "Frame A cursor ready" [ref=f1e3] [cursor=pointer]',
+  '  - iframe [ref=f1e4]:',
+  '    - button "Grandchild action ready" [ref=f3e2]',
+  '    - group "Grandchild cursor ready" [ref=f3e3] [cursor=pointer]',
+  '- iframe [ref=e5]:',
+  '  - button "Frame B action ready" [ref=f2e1]',
+  '  - text: Frame B cursor ready',
 ].join('\n')
+const deepSnapshot = [
+  frameSnapshot,
+  '  - iframe [ref=f2e3]:',
+  '    - button "Deep frame action ready" [ref=f4e1]',
+  '    - text: Deep frame cursor ready',
+].join('\n')
+const zeroLine =
+  '- group "Zero-sized excluded target" [ref=e71] [cursor=pointer]'
 const cardSnapshot = [
   '- heading "Script isolation fixture" [level=1]',
   '- group "Assigned onclick control" [ref=first] [cursor=pointer]',
@@ -23,8 +38,11 @@ const cardSnapshot = [
   '- group "Pointer card" [ref=fourth] [cursor=pointer]',
   '- status: untouched',
 ].join('\n')
-const labelPrefix =
-  'Error: exactly one label ref remains, for the hidden Remember me control; actual='
+const frameBPrefix =
+  'Error: snapshot must give Frame B cursor ready its own ref; actual='
+const deepPrefix =
+  'Error: snapshot must give Deep frame cursor ready its own ref; actual='
+const zeroPrefix = 'Error: the zero-sized target has no actionable ref; actual='
 const isolatedPrefix =
   'Error: snapshot must give Card delete control its own ref; actual='
 const cardPrefix = 'Error: No ref for Card delete control; actual='
@@ -59,10 +77,26 @@ const knownMessages: readonly {
   message: string
 }[] = [
   {
-    signature: 'hidden-label-ref',
+    signature: 'below-fold-oopif-ref',
     message:
-      labelPrefix +
-      JSON.stringify({ labelTargets: [], snapshot: labelSnapshot }),
+      frameBPrefix +
+      JSON.stringify({
+        line: '  - text: Frame B cursor ready',
+        snapshot: frameSnapshot,
+      }),
+  },
+  {
+    signature: 'below-fold-oopif-ref',
+    message:
+      deepPrefix +
+      JSON.stringify({
+        line: '    - text: Deep frame cursor ready',
+        snapshot: deepSnapshot,
+      }),
+  },
+  {
+    signature: 'zero-size-target-ref',
+    message: zeroPrefix + JSON.stringify({ zero: zeroLine }),
   },
   {
     signature: 'isolated-child-ref',
@@ -169,39 +203,87 @@ describe('strict desktop expected failures', () => {
     }
   })
 
-  test('hidden labels require all three textbox refs, Remember me text, and no label targets', () => {
-    const expected = expectation('hidden-label-ref')
-    const payloads = [
-      {
-        labelTargets: [{ ref: 'new', text: 'Remember me' }],
-        snapshot: labelSnapshot,
-      },
-      {
-        labelTargets: [],
-        snapshot: labelSnapshot.replace(
-          'textbox "Wrapped name" [ref=second]',
-          'textbox "Wrapped name"',
-        ),
-      },
-      {
-        labelTargets: [],
-        snapshot: labelSnapshot.replace('Remember me', 'Other label'),
-      },
-      { labelTargets: [], snapshot: labelSnapshot, unrelated: true },
-      { snapshot: labelSnapshot },
+  test('below-fold frame signatures require stitch order, the six in-view refs, and only the cursor as text', () => {
+    const wrongSnapshots = [
+      frameSnapshot.replace(
+        '- text: Frame B cursor ready',
+        '- group "Frame B cursor ready" [ref=f2e2] [cursor=pointer]',
+      ),
+      frameSnapshot.replace(
+        'group "Frame A cursor ready" [ref=f1e3] [cursor=pointer]',
+        'text: Frame A cursor ready',
+      ),
+      frameSnapshot.replace(
+        'button "Frame B action ready" [ref=f2e1]',
+        'button "Frame B action ready"',
+      ),
+      frameSnapshot
+        .replace('Parent action ready', 'Moved action')
+        .concat('\n- button "Parent action ready" [ref=e9]'),
     ]
-    for (const value of payloads) {
+    for (const snapshot of wrongSnapshots) {
       expect(
         matchesExpectedFailure({
-          expectation: expected,
-          reply: failure(labelPrefix + JSON.stringify(value)),
+          expectation: expectation('below-fold-oopif-ref'),
+          reply: failure(
+            frameBPrefix +
+              JSON.stringify({
+                line: '  - text: Frame B cursor ready',
+                snapshot,
+              }),
+          ),
         }),
       ).toBe(false)
     }
     expect(
       matchesExpectedFailure({
-        expectation: expected,
-        reply: failure(`${labelPrefix}{broken json`),
+        expectation: expectation('below-fold-oopif-ref'),
+        reply: failure(
+          deepPrefix +
+            JSON.stringify({
+              line: '    - text: Deep frame cursor ready',
+              snapshot: deepSnapshot.replace(
+                'button "Deep frame action ready" [ref=f4e1]',
+                'button "Deep frame action ready"',
+              ),
+            }),
+        ),
+      }),
+    ).toBe(false)
+    expect(
+      matchesExpectedFailure({
+        expectation: expectation('below-fold-oopif-ref'),
+        reply: failure(
+          frameBPrefix +
+            JSON.stringify({
+              line: '  - text: Frame B cursor ready',
+              snapshot: frameSnapshot,
+              extra: 1,
+            }),
+        ),
+      }),
+    ).toBe(false)
+  })
+
+  test('the zero-size signature requires exactly the zero-sized group line with a ref', () => {
+    for (const zero of [
+      '- group "Zero-sized excluded target"',
+      '- group "Other target" [ref=e71] [cursor=pointer]',
+      zeroLine.replace(' [cursor=pointer]', ''),
+    ]) {
+      expect(
+        matchesExpectedFailure({
+          expectation: expectation('zero-size-target-ref'),
+          reply: failure(zeroPrefix + JSON.stringify({ zero })),
+        }),
+      ).toBe(false)
+    }
+    expect(
+      matchesExpectedFailure({
+        expectation: expectation('zero-size-target-ref'),
+        reply: failure(
+          zeroPrefix + JSON.stringify({ zero: zeroLine, other: 1 }),
+        ),
       }),
     ).toBe(false)
   })

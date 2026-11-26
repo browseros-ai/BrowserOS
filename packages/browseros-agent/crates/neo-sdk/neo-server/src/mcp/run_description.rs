@@ -50,7 +50,7 @@ const LOOP: &str = r#"Work in a loop: look, act, look again.
   Pages often list a popup last, where a slice, a line filter or a small `maxTokens` can cut it off; only a block with a dialog or alert role survives the cut."#;
 
 /// What the snapshot's `# on top:` lines mean. The snapshot prints them above everything else
-/// when a layer takes the pointer from controls (`neo-playwright/src/snapshot/snapshot_op.rs`,
+/// when a layer takes the pointer from controls (`neo-playwright/src/snapshot/tree_snapshot.rs`,
 /// worded by `on_top_line` in `cover.rs`), and they ask the agent to act on that layer first, so
 /// they earn a sentence on every call; the inert rule's `# not listed:` line explains itself
 /// and has none.
@@ -324,7 +324,8 @@ mod tests {
     /// This text must ship with the snapshot's behaviour, not merely with an unused formatter.
     #[test]
     fn the_on_top_sentence_has_a_snapshot_caller() {
-        const SNAPSHOT: &str = include_str!("../../../neo-playwright/src/snapshot/snapshot_op.rs");
+        const SNAPSHOT: &str =
+            include_str!("../../../neo-playwright/src/snapshot/tree_snapshot.rs");
         assert!(SNAPSHOT.contains("action::on_top_line(&note)"));
         assert!(SNAPSHOT_ON_TOP.contains("`# on top: …`"));
     }

@@ -42,7 +42,7 @@ import { read, readAll } from './read'
 import { replyText } from './reply-text'
 import { generatedSelector, pinned, resolve } from './resolve'
 import { screenshotMask, screenshotMaskCleanup } from './screenshot'
-import { installShadowRoots } from './shadow-roots'
+import { installShadowRoots, openClosedRootsOf } from './shadow-roots'
 import { snapshot } from './snapshot'
 import { describePins, stage } from './stage'
 import { matchUrl } from './url'
@@ -99,6 +99,7 @@ const HANDLERS: Handlers = {
   describePins,
   coverSurvey,
   privateMarks,
+  openClosedRoots: openClosedRootsOf,
 }
 
 const UNINSTALLED: Uninstalled = { kind: 'uninstalled' }

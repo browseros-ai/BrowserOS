@@ -36,8 +36,8 @@ use crate::resolve::{ChunkPage, ChunkRun, QueryRoot};
 use crate::tree::{CapturedTree, TabTree};
 use crate::world::{IsolatedWorld, Pin};
 
-/// `DOM.resolveNode` calls in flight for one call's nodes, as clickable marking resolves its
-/// closed-root seeds (`snapshot/clickable_targets.rs`, where 999 such resolves added 52 ms). Kept in
+/// `DOM.resolveNode` calls in flight for one call's nodes, as clickable marking resolved its
+/// closed-root seeds before the switch-over (999 such resolves added 52 ms). Kept in
 /// order here, because call node `i` is `nodes[i]`, so one slow node holds back those after it.
 const RESOLVES_IN_FLIGHT: usize = 8;
 

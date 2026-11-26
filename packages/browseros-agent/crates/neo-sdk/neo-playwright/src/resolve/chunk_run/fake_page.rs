@@ -431,6 +431,7 @@ impl FakePage {
             let locator = self.locator_for(strict);
             return ProbeReply::Strict {
                 message: self.violation(&locator, &matches),
+                listing: None,
             };
         }
         let matches = matches

@@ -191,3 +191,18 @@ export function openClosedRoots(seeds: readonly unknown[]): void {
     if (Reflect.apply(read, host, []) !== root) closedRoots.set(host, root)
   }
 }
+
+/**
+ * `openClosedRoots`: the seeds an APC capture marked inside the page's closed shadow roots
+ * (contract field 31), handed after a marked snapshot, so this world's CSS and text engines see
+ * into those roots from then on, as they did after the clickable scan's seeds.
+ */
+export function openClosedRootsOf(
+  _world: unknown,
+  _request: unknown,
+  _root: Node | undefined,
+  nodes: readonly unknown[],
+): { kind: 'value'; value: null } {
+  openClosedRoots(nodes)
+  return { kind: 'value', value: null }
+}

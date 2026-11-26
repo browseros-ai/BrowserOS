@@ -99,8 +99,8 @@ async fn poll_locator<'op>(
         if scope.sleep(backoff.wait(attempt)).await.is_err() {
             return Err(scope.timed_out(ErrorCode::NoMatch));
         }
-        let request = |last, frame_visible| ProbeRequest::Read {
-            target: ProbeTarget::Chunk(last),
+        let request = |target, frame_visible| ProbeRequest::Read {
+            target,
             strictness: strict,
             frame_visible,
             read: read.clone(),
@@ -183,8 +183,8 @@ pub(crate) async fn read_visibility(
     let resolver = Resolver::new(&page, scope, target, strict);
     scope.log(format!("  checking visibility of {}", target.display));
     let landed = resolver
-        .attempt_at(|last, frame_visible| ProbeRequest::Read {
-            target: ProbeTarget::Chunk(last),
+        .attempt_at(|target, frame_visible| ProbeRequest::Read {
+            target,
             strictness: strict,
             frame_visible,
             read: read.clone(),

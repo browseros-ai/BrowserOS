@@ -18,7 +18,8 @@ export type Step =
   | { kind: 'parallel'; scripts: readonly [string, string, string, string] }
 
 export type FailureSignature =
-  | 'hidden-label-ref'
+  | 'below-fold-oopif-ref'
+  | 'zero-size-target-ref'
   | 'isolated-child-ref'
   | 'card-child-ref'
   | 'invalid-date-reset'

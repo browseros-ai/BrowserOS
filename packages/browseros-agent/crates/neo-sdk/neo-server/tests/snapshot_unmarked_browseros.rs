@@ -1,6 +1,8 @@
-//! A bounded busy frame forces the clickable check to miss its budget while the snapshot
-//! still returns. The subsequent idle read of the same DOM shows its script-only ref again,
-//! without relying on malformed page strings or on the shared protocol client dropping them.
+//! A busy main thread costs a snapshot no refs: what Chromium reports clickable comes with the
+//! APC tree (apc-engine-design 3.5), so the snapshot waits out the busy frame, prints no
+//! `# refs missing:` line, and keeps the script-only element's ref; an idle read of the same DOM
+//! prints the same, without relying on malformed page strings or on the shared protocol client
+//! dropping them.
 
 #[path = "support/browseros_rig.rs"]
 pub mod browseros_rig;
@@ -40,14 +42,13 @@ return {snapshot,elapsed,listener:snapshot.split('\n').find(l=>l.includes('Scrip
 "#;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn busy_snapshot_check_explains_missing_script_only_refs_and_recovers() -> TestResult {
+async fn busy_snapshot_waits_for_the_tree_and_keeps_script_only_refs() -> TestResult {
     let Some(browser) = browseros_rig::browser_or_skip() else {
         return Ok(());
     };
     // The rig runs hosted mode, which emits no console events, so this row cannot use them.
     // The bare script timer sends no renderer request; page.waitForTimeout refreshes frames.
-    // If the evaluate began late, the check would finish and the notice assertion would fail
-    // rather than pass a false proof. No elapsed-time assertion depends on machine speed.
+    // No elapsed-time assertion depends on machine speed.
     let rig = Rig::start(&browser, CaptchaKey::Absent)?;
     rig.until_ready().await?;
     let client = rig.client().await?;
@@ -55,13 +56,13 @@ async fn busy_snapshot_check_explains_missing_script_only_refs_and_recovers() ->
     let snapshot = busy["snapshot"]
         .as_str()
         .ok_or("the busy snapshot returned text")?;
-    assert!(snapshot.starts_with("# refs missing: the check for clickable elements did not finish on this page (timeout)."), "{busy}");
+    assert!(!snapshot.contains("# refs missing:"), "{busy}");
     let listener = busy["listener"]
         .as_str()
         .ok_or("script-only content remains listed")?;
-    assert!(!listener.contains("[ref="), "{listener}");
+    assert!(listener.contains("[ref="), "{listener}");
     // The busy snapshot's tree needs the main thread: its return proves the loop has ended.
-    // This idle read needs no further wait and observes the same DOM with its check restored.
+    // This idle read needs no further wait and observes the same DOM.
     let idle = value(
         &client,
         "snapshot-check-busy",
@@ -89,7 +90,7 @@ return {snapshot,listener:snapshot.split('\n').find(l=>l.includes('Script only')
     );
     writeln!(
         io::stderr(),
-        "REFS_MISSING busy=returned notice=timeout listener_ref=absent idle=returned idle_ref=present elapsed_ms={}",
+        "REFS_MISSING busy=returned notice=none listener_ref=present idle=returned idle_ref=present elapsed_ms={}",
         busy["elapsed"]
     )?;
     client.cancel().await?;

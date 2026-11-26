@@ -22,7 +22,7 @@
  * Neo does not wait here: a box that is hidden, covered or read-only now is refused now. The
  * host approved a box in one state, so a different state is a refusal, never a wait.
  */
-import { type CoverAria, coverAriaFor } from './cover-aria'
+import { getAriaLabelledByElements } from '../stubs/roleUtils'
 import type {
   BoxAsk,
   BoxExpect,
@@ -70,12 +70,7 @@ export function look(world: World, request: LookRequest): ReplyTo<'look'> {
  * text input, and the first check it fails: a covered box answers both. Without `expect` (a
  * check call before the host approved anything) no origin and no fact is checked.
  */
-export function lookAt(
-  world: World,
-  element: Element,
-  ask: BoxAsk,
-  aria: Pick<CoverAria, 'nameOf'> = coverAriaFor(world),
-): Looked {
+export function lookAt(world: World, element: Element, ask: BoxAsk): Looked {
   // Every look starts without the wrapper an earlier one kept: a box with no size is reached by
   // focus and never hit-tested, so a wrapper from a look when it had a size must not carry over.
   coverWrappers.delete(element)
@@ -90,7 +85,7 @@ export function lookAt(
       behavior: 'instant',
     })
   const facts = factsOf(element)
-  const refusal = firstRefusal(world, element, facts, ask, aria)
+  const refusal = firstRefusal(world, element, facts, ask)
   // Ruling R64: the limit moved and still fits, so the look went on; the answer says so.
   const moved =
     ask.expect !== undefined && limitMove(facts, ask.expect, ask) === 'fits'
@@ -106,7 +101,6 @@ function firstRefusal(
   element: HTMLInputElement,
   facts: BoxFacts,
   ask: BoxAsk,
-  aria: Pick<CoverAria, 'nameOf'>,
 ): LookRefused | undefined {
   const { expect } = ask
   if (expect && facts.origin !== expect.origin) return { code: 'wrongOrigin' }
@@ -125,8 +119,7 @@ function firstRefusal(
     !world.injected.elementState(element, 'visible', ask.frameVisible).matches
   )
     return { code: 'boxHidden' }
-  else if (blocked(world, element, ask.keys, aria))
-    return { code: 'boxCovered' }
+  else if (blocked(element, ask.keys, ask.name)) return { code: 'boxCovered' }
   if (
     ask.length !== undefined &&
     !ask.cut &&
@@ -295,16 +288,11 @@ export function coverWrapper(box: Element): Element | undefined {
  * not cover it ([`drawingOf`], rulings R55 and R56). tests/private_look_live.rs holds the look
  * against main's own script on every page, and lists the pages where the two differ.
  */
-function blocked(
-  world: World,
-  box: Element,
-  keys: boolean,
-  aria: Pick<CoverAria, 'nameOf'>,
-): boolean {
+function blocked(box: Element, keys: boolean, name?: string): boolean {
   const blocker = blockerOf(box)
   if (blocker === null) return false
   if (blocker === 'unread') return true
-  const wrapper = drawingOf(world, box, blocker, keys, aria)
+  const wrapper = drawingOf(box, blocker, keys, name)
   if (!wrapper) return true
   coverWrappers.set(box, wrapper)
   return false
@@ -325,18 +313,18 @@ export const CONTROLS =
  *    holds no control and is none; a `<label>` for another control counts as one (`labelsAnother`).
  * 4. The cover lies within the box's rectangle grown by half its width on each side and half its
  *    height above and below.
- * 5. The cover draws the box's own name: its rendered text and the box's accessible name, as the
- *    snapshot engine computes it, are the same once folded (`sameName`); the box is typed either
- *    way. Or it draws nothing (its rendered text is empty once folded), as a code field's drawn
- *    digits do before any is typed; then only key by key (`keys`), as a host types a code.
- *    Other words cover the box.
+ * 5. The cover draws the box's own name: its rendered text and the box's name are the same once
+ *    folded (`sameName`); the box is typed either way. The name is `name`, the box's accessible
+ *    name as Rust read it from the tab's tree (the look's `BoxAsk.name`), else the box's own
+ *    label (`labelOf`), since this world computes no accessible name. Or it draws nothing (its
+ *    rendered text is empty once folded), as a code field's drawn digits do before any is typed;
+ *    then only key by key (`keys`), as a host types a code. Other words cover the box.
  */
 export function drawingOf(
-  world: World,
   box: Element,
   blocker: Element,
   keys: boolean,
-  aria: Pick<CoverAria, 'nameOf'> = coverAriaFor(world),
+  name?: string,
 ): Element | null {
   if (blocker.ownerDocument !== box.ownerDocument) return null
   const parent = box.parentElement
@@ -374,8 +362,37 @@ export function drawingOf(
     return null
   const text = renderedText(cover)
   if (fold(text) === '') return keys ? wrapper : null
-  const name = aria.nameOf(box)
-  return sameName(text, name) ? wrapper : null
+  return sameName(text, name ?? labelOf(box)) ? wrapper : null
+}
+
+/**
+ * The element's name by its own labelling, the first that is not blank: the text of the elements
+ * `aria-labelledby` names, `aria-label`, its `<label>`s' text, `title`, `placeholder`. The order
+ * the accessible-name computation tries them in, for what this world must name without the tree:
+ * a box with no name hint, and a plain container, which takes no name from its content. A name
+ * that comes from content, a button's text, is the tree's alone.
+ */
+export function labelOf(element: Element): string {
+  const reads = [
+    () =>
+      (getAriaLabelledByElements(element) ?? []).map(renderedText).join(' '),
+    () => element.getAttribute('aria-label') ?? '',
+    () => {
+      const labels: unknown = Reflect.get(element, 'labels')
+      return labels instanceof NodeList
+        ? Array.from(labels, (label) =>
+            label instanceof Element ? renderedText(label) : '',
+          ).join(' ')
+        : ''
+    },
+    () => element.getAttribute('title') ?? '',
+    () => element.getAttribute('placeholder') ?? '',
+  ]
+  for (const read of reads) {
+    const text = read().replace(/\s+/g, ' ').trim()
+    if (text) return text
+  }
+  return ''
 }
 
 /**

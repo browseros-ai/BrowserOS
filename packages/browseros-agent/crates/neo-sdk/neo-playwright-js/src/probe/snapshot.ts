@@ -11,7 +11,6 @@
  */
 
 import { parseSelector } from '../../../neo-playwright/third_party/playwright/packages/isomorphic/selectorParser'
-import { surveyCovers } from './cover-survey'
 import type { FailureOutput } from './failure-output'
 import {
   asPointerTargets,
@@ -83,20 +82,8 @@ export function snapshot(
     markInert(world, json)
     inertMarkingMs = performance.now() - started
   }
-  // Survey only the whole main page, after the engine's walk and inside this same read.
-  // Remember before diagnostics take any quiet subtree snapshots, so the printed refs win.
   const minted = request.mode === 'ai' ? lastSnapshotRefs(injected) : undefined
   if (minted) world.refs.remember(minted)
-  let survey: ReturnType<typeof surveyCovers> | undefined
-  let surveyFailed = false
-  if (request.surveyCovers && request.mode === 'ai' && output.neoSnapshot) {
-    // Cover hints are diagnostic: an unforeseen page shape must never take away its read.
-    try {
-      survey = surveyCovers(world, output, json)
-    } catch {
-      surveyFailed = true
-    }
-  }
   const iframes: SnapshotIframe[] = []
   if (minted) {
     // Only the iframes the depth limit rendered, as upstream's `renderedIframeRefs`.
@@ -107,17 +94,10 @@ export function snapshot(
       iframes.push({ ref, depth, src: frameSource(element) ?? '' })
     }
   }
+  // The `# on top:` survey is its own request now (`coverSurvey`), named from the tab's tree; this
+  // engine snapshot, which Rust no longer asks for, carries none.
   return {
     kind: 'snapshot',
-    ...(survey
-      ? {
-          onTop: survey.layers,
-          surveyTested: survey.tested,
-          surveyMs: survey.phases.hits,
-          surveyPhases: survey.phases,
-        }
-      : {}),
-    ...(surveyFailed || survey?.marksSkipped ? { onTopSkipped: true } : {}),
     ...(inertMarkingMs === undefined ? {} : { inertMarkingMs }),
     json,
     iframes,

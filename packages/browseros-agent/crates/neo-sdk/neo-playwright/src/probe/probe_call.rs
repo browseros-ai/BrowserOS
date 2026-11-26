@@ -86,7 +86,6 @@ pub(crate) async fn cleanup(
 /// Used by coalesced APC captures (section 6.3) to prove that a cached world installed before the
 /// capture is still alive after the capture returns. `describe` reads only protocol version, seq,
 /// and URL, so it carries no conformance or moved-field policy side effects.
-#[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
 pub(crate) async fn describe(world: &IsolatedWorld) -> Result<ProbeReply, ProbeFailure> {
     let policy = ProbePolicy {
         conformance: false,

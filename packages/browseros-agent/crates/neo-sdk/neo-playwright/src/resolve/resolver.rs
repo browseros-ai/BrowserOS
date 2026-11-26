@@ -7,13 +7,16 @@ use serde_json::{Value, json};
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
 use crate::probe::{
-    self, ErrorClass, ParsedSelector, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget,
-    QueryState, Read, Want,
+    self, ErrorClass, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, QueryState, Read,
+    ResolvedSet, SetMember, Want,
 };
 use crate::resolve::frame_start::{FrameStart, Started};
-use crate::resolve::{self, FramePath, HandleSite, Hop, HopIframe};
+use crate::resolve::{
+    self, Aim, AimFailure, FramePath, HandleSite, Hop, HopIframe, PassTree, Reads, strict_akas,
+};
 use crate::target::{AriaRefJump, Chunk, LocatorTarget, RootHandle, Strictness};
-use crate::world::{Endpoint, IsolatedWorld, ParentLink, Pin, Place, SeqLookup};
+use crate::tree::RefLanding;
+use crate::world::{Endpoint, IsolatedWorld, ParentLink, Pin, Place};
 use crate::{ErrorCode, PlaywrightError};
 
 /// Resolves one locator for one op. It never waits: "not there yet" is an attempt that lands
@@ -27,6 +30,8 @@ pub(crate) struct Resolver<'a> {
     /// The child frame the locator was built from (`frame.locator(..)`), where its first chunk
     /// runs unless that chunk jumps to a ref; `None` starts in the main frame.
     start: Option<FrameStart>,
+    /// What the op's request reads of the last chunk's matches.
+    reads: Reads,
 }
 
 /// A reply, and where the request that got it ran: what an op needs when it goes on working
@@ -37,6 +42,17 @@ pub(crate) struct Landed {
     pub(crate) reply: ProbeReply,
     pub(crate) world: IsolatedWorld,
     pub(crate) path: FramePath,
+    /// What the op's request was built from; `None` when Rust answered the chunk itself (a
+    /// strict violation it decided) and nothing was sent.
+    pub(crate) sent: Option<SentRequest>,
+}
+
+/// What an op's request was built from in its world: the target it named there, and whether
+/// every frame on the way is visible (upstream's `frameVisible`).
+#[derive(Debug)]
+pub(crate) struct SentRequest {
+    pub(crate) target: ProbeTarget,
+    pub(crate) frame_visible: bool,
 }
 
 /// The frames one pass went through so far: their parents, top down, and whether every
@@ -73,6 +89,10 @@ pub(crate) struct Resolved {
     jumped: Option<AriaRefJump>,
     /// The handle's node the last chunk is queried from, when it is also the first.
     root: Option<String>,
+    /// What the last chunk names in `world` for this attempt: the chunk itself, the set Rust's
+    /// tree resolved it to, or the element a leading ref was hydrated into
+    /// (`resolve::tree_chunk`).
+    target: ProbeTarget,
 }
 
 impl Resolved {
@@ -86,7 +106,14 @@ impl Resolved {
             frame_visible: true,
             jumped: None,
             root: Some(site.node().to_owned()),
+            target: ProbeTarget::Root,
         }
+    }
+
+    /// What the last chunk names in [`Resolved::world`]: the target of the op's first request,
+    /// before it pins anything of its own.
+    pub(crate) fn target(&self) -> &ProbeTarget {
+        &self.target
     }
 
     /// Sends `request` in [`Resolved::world`], with the root node the target is queried from
@@ -120,10 +147,46 @@ impl Resolved {
 /// One pass over the chunks.
 enum Step {
     Ready(Resolved),
+    /// Rust answered the last chunk itself (a strict-mode violation, an error it throws): the
+    /// reply the page would have given, and where.
+    Answered(Landed),
     Missing,
     /// A world on the way turned out gone; it is invalidated (when there is one) and the pass
     /// runs again.
     Gone(Option<IsolatedWorld>),
+}
+
+/// The world a chunk runs in, and the element its leading ref was hydrated into.
+struct Entered {
+    world: IsolatedWorld,
+    lead: Lead,
+}
+
+/// What a chunk's leading ref came to once entered.
+#[derive(Clone, Copy)]
+enum Lead {
+    /// The chunk leads with no ref.
+    NoRef,
+    /// The ref's element, hydrated and pinned in the chunk's world.
+    Pinned(Pin),
+    /// The ref's element left its live document (`RefLanding::Left`).
+    Left(AriaRefJump),
+}
+
+/// [`Aim`], with the liveness rule's case beside it.
+enum Aimed {
+    Target(ProbeTarget),
+    Answered(ProbeReply),
+    Again,
+    /// The world went away while the chunk ran in it.
+    Gone,
+}
+
+/// A hop's chunk and what it names in the parent's world: the chunk prints in the not-an-iframe
+/// message, the target is what the hop's `resolve` asks for.
+pub(crate) struct HopChunk<'c> {
+    pub(crate) chunk: &'c Chunk,
+    pub(crate) target: ProbeTarget,
 }
 
 /// An `<iframe>` a hop found in its parent's world: its remote object (in the op's group), its
@@ -189,7 +252,15 @@ impl<'a> Resolver<'a> {
             target,
             strictness,
             start,
+            reads: Reads::All,
         }
+    }
+
+    /// The resolver for an op that reads only how many elements match (`count()`): a last chunk
+    /// that ends over the tree answers that from its matches and hydrates none of them.
+    pub(crate) const fn counting(mut self) -> Self {
+        self.reads = Reads::Count;
+        self
     }
 
     /// Resolves the target and sends the op's request, built by `request` from the last chunk
@@ -203,11 +274,12 @@ impl<'a> Resolver<'a> {
     /// document is the ref's, so the op fails at once with `element_detached`.
     pub(crate) async fn attempt_at(
         &self,
-        request: impl Fn(ParsedSelector, bool) -> ProbeRequest,
+        request: impl Fn(ProbeTarget, bool) -> ProbeRequest,
     ) -> Result<Option<Landed>, PlaywrightError> {
         for _ in 0..2 {
             let resolved = match self.resolve().await? {
                 Step::Ready(resolved) => resolved,
+                Step::Answered(landed) => return Ok(Some(landed)),
                 Step::Missing => return Ok(None),
                 Step::Gone(world) => {
                     if let Some(world) = world {
@@ -216,14 +288,17 @@ impl<'a> Resolver<'a> {
                     continue;
                 }
             };
-            let last = ParsedSelector::of(self.target.chunks.last());
-            let request = request(last, resolved.frame_visible);
+            let request = request(resolved.target.clone(), resolved.frame_visible);
             match resolved.call(self.scope, self.page, &request).await {
                 Ok(reply) => {
                     return Ok(Some(Landed {
                         reply,
                         world: resolved.world,
                         path: resolved.path,
+                        sent: Some(SentRequest {
+                            target: resolved.target,
+                            frame_visible: resolved.frame_visible,
+                        }),
                     }));
                 }
                 Err(ProbeFailure::Gone(_)) => {
@@ -246,6 +321,8 @@ impl<'a> Resolver<'a> {
         for _ in 0..2 {
             match self.resolve().await? {
                 Step::Ready(resolved) => return Ok(Some(resolved)),
+                // Every request on the chunk would get this reply, and each one ends the op.
+                Step::Answered(landed) => return Err(self.refused(landed.reply)),
                 Step::Missing => return Ok(None),
                 Step::Gone(world) => {
                     if let Some(world) = world {
@@ -275,25 +352,47 @@ impl<'a> Resolver<'a> {
 
     /// One pass: the start world, then one hop per chunk but the last. A chunk that leads
     /// with a ref jumps to the document that printed it first, as upstream's
-    /// `_jumpToAriaRefFrameIfNeeded` does, so no start world is needed for it.
+    /// `_jumpToAriaRefFrameIfNeeded` does, so no start world is needed for it. Every tree chunk
+    /// of the pass reads one capture (`PassTree`), so the pass answers from one tree.
     async fn resolve(&self) -> Result<Step, PlaywrightError> {
+        let mut pass = PassTree::new();
         let mut world: Option<IsolatedWorld> = None;
         let mut way = Way::top();
         let mut jumped = None;
         for chunk in self.target.chunks.hops() {
-            let parent = match self.enter(chunk, world.take(), &mut way).await? {
-                Ok(parent) => parent,
+            let Entered {
+                world: parent,
+                lead,
+            } = match self.enter(chunk, world.take(), &mut way).await? {
+                Ok(entered) => entered,
                 Err(step) => return Ok(step),
             };
             if chunk.jump.is_some() {
                 jumped = chunk.jump;
             }
             let root = way.root.take();
+            let target = match self
+                .aim(
+                    &mut pass,
+                    &parent,
+                    chunk,
+                    lead,
+                    root.as_deref(),
+                    Reads::First,
+                )
+                .await?
+            {
+                Aimed::Target(target) => target,
+                // A hop's chunk refused: what its `resolve` reply would have ended the op with.
+                Aimed::Answered(reply) => return Err(refused(self.scope, reply)),
+                Aimed::Again => return Ok(Step::Missing),
+                Aimed::Gone => return self.gone(parent, jumped),
+            };
             let hopped = hop_from(
                 self.page,
                 self.scope,
                 &parent,
-                chunk,
+                HopChunk { chunk, target },
                 self.strictness,
                 root.as_deref(),
             );
@@ -309,64 +408,175 @@ impl<'a> Resolver<'a> {
                     jumped = None;
                 }
                 Hopped::Missing => return Ok(Step::Missing),
-                Hopped::ParentGone => {
-                    return match jumped {
-                        Some(jump) => {
-                            self.page.frames().invalidate(&parent);
-                            Err(self.detached(&jump.to_string()))
-                        }
-                        None => Ok(Step::Gone(Some(parent))),
-                    };
-                }
+                Hopped::ParentGone => return self.gone(parent, jumped),
                 Hopped::ChildGone => return Ok(Step::Gone(None)),
             }
         }
         let last = self.target.chunks.last();
-        let world = match self.enter(last, world, &mut way).await? {
-            Ok(world) => world,
+        let Entered { world, lead } = match self.enter(last, world, &mut way).await? {
+            Ok(entered) => entered,
             Err(step) => return Ok(step),
         };
         if last.jump.is_some() {
             jumped = last.jump;
         }
+        let target = match self
+            .aim(
+                &mut pass,
+                &world,
+                last,
+                lead,
+                way.root.as_deref(),
+                self.reads,
+            )
+            .await?
+        {
+            Aimed::Target(target) => target,
+            Aimed::Answered(reply) => {
+                return Ok(Step::Answered(Landed {
+                    reply,
+                    world,
+                    path: way.path,
+                    sent: None,
+                }));
+            }
+            Aimed::Again => return Ok(Step::Missing),
+            Aimed::Gone => return self.gone(world, jumped),
+        };
         Ok(Step::Ready(Resolved {
             world,
             path: way.path,
             frame_visible: way.frame_visible,
             jumped,
             root: way.root,
+            target,
         }))
+    }
+
+    /// `world` went away under the pass: a ref jump's document is gone for good, any other world
+    /// is invalidated by the caller and the pass runs again.
+    fn gone(
+        &self,
+        world: IsolatedWorld,
+        jumped: Option<AriaRefJump>,
+    ) -> Result<Step, PlaywrightError> {
+        match jumped {
+            Some(jump) => {
+                self.page
+                    .tree()
+                    .invalidate_world(self.page.frames(), &world);
+                Err(self.detached(&jump.to_string()))
+            }
+            None => Ok(Step::Gone(Some(world))),
+        }
+    }
+
+    /// What `chunk` names in `world`: the element its leading ref was already hydrated into, the
+    /// chunk itself for the page, or what the attempt's tree resolved it to.
+    async fn aim(
+        &self,
+        pass: &mut PassTree,
+        world: &IsolatedWorld,
+        chunk: &Chunk,
+        lead: Lead,
+        root: Option<&str>,
+        reads: Reads,
+    ) -> Result<Aimed, PlaywrightError> {
+        if let Lead::Left(jump) = lead {
+            return match reads {
+                // What the page's ref engine answered for a ref whose element left: a set of
+                // nothing that names the ref, so each op decides on it as before. The rest of the
+                // chunk matches nothing inside an element that is gone.
+                Reads::All | Reads::Count => Ok(Aimed::Target(ProbeTarget::Set(ResolvedSet {
+                    members: Vec::new(),
+                    stale_ref: Some(jump.to_string()),
+                }))),
+                // A hop through it: the iframe that led on is gone.
+                Reads::First => Err(self.detached(&jump.to_string())),
+            };
+        }
+        if let Lead::Pinned(pin) = lead {
+            if chunk.is_bare_ref() {
+                // The op's own element goes as a set of one, which the page answers exactly as
+                // the pin (a member that left its document is `detached`) and also names in the
+                // reply's `resolved`, so the call log says what the locator resolved to, as
+                // upstream's does for every locator; a hop's iframe is never logged.
+                return Ok(Aimed::Target(match reads {
+                    Reads::All | Reads::Count => ProbeTarget::Set(ResolvedSet {
+                        members: vec![SetMember::Pin(pin)],
+                        stale_ref: None,
+                    }),
+                    Reads::First => ProbeTarget::Pin(pin),
+                }));
+            }
+            let from_ref =
+                resolve::aim_from_ref(self.page, self.scope, world, chunk, pin, self.strictness);
+            if let Some(aimed) = Box::pin(from_ref).await {
+                return Ok(match aimed {
+                    Ok(Aim::Target(target)) => Aimed::Target(target),
+                    Ok(Aim::Answered(reply)) => Aimed::Answered(reply),
+                    Ok(Aim::Again) => Aimed::Again,
+                    Err(AimFailure::Gone) => Aimed::Gone,
+                    Err(AimFailure::Failed(error)) => return Err(error),
+                });
+            }
+        }
+        // Boxed: a tree chunk's run holds a capture and a chunk run, inside every attempt of
+        // every locator op's future, as the hops are boxed.
+        let aimed = Box::pin(resolve::aim(
+            self.page,
+            self.scope,
+            pass,
+            world,
+            chunk,
+            self.strictness,
+            root,
+            reads,
+        ))
+        .await;
+        Ok(match aimed {
+            Ok(Aim::Target(target)) => Aimed::Target(target),
+            Ok(Aim::Answered(reply)) => Aimed::Answered(reply),
+            Ok(Aim::Again) => Aimed::Again,
+            Err(AimFailure::Gone) => Aimed::Gone,
+            Err(AimFailure::Failed(error)) => return Err(error),
+        })
     }
 
     /// The world `chunk` runs in: the document its leading ref names, else `current`, else
     /// the start world (the main frame's, or the locator's own frame's). A jump or a frame
     /// start replaces the way with the frames above its world.
+    ///
+    /// A leading ref is hydrated here, through the tab's ref table and `DocTable` (design 6.4):
+    /// a document already bound to a world needs no capture, and a chunk that is that ref alone
+    /// names the element hydrated, pinned in its world.
     async fn enter(
         &self,
         chunk: &Chunk,
         current: Option<IsolatedWorld>,
         way: &mut Way,
-    ) -> Result<Result<IsolatedWorld, Step>, PlaywrightError> {
+    ) -> Result<Result<Entered, Step>, PlaywrightError> {
         if let Some(jump) = chunk.jump {
-            return match self.page.frames().by_seq(jump.seq) {
-                SeqLookup::Live { world, parents } => {
-                    let path = FramePath::from_parents(parents);
-                    *way = Way {
-                        frame_visible: iframes_visible(self.scope, self.page, &path).await?,
-                        path,
-                        root: None,
-                    };
-                    Ok(Ok(*world))
-                }
-                SeqLookup::Retired => Err(self.detached(&jump.to_string())),
-                SeqLookup::Unknown => Err(self.scope.fail(
-                    ErrorCode::InvalidInput,
-                    &ref_message(self.scope, &jump.to_string(), "is not a ref on this page"),
-                )),
+            let landing = Box::pin(self.page.tree().land_ref(self.scope, self.page, jump)).await?;
+            let (world, path, lead) = match landing {
+                RefLanding::Node(node) => (node.world, node.path, Lead::Pinned(node.pin)),
+                RefLanding::Left { world, path } => (world, path, Lead::Left(jump)),
             };
+            *way = Way {
+                frame_visible: iframes_visible(self.scope, self.page, &path).await?,
+                path,
+                root: None,
+            };
+            return Ok(Ok(Entered { world, lead }));
         }
-        if let Some(world) = current {
-            return Ok(Ok(world));
+        let world = |world| {
+            Ok(Ok(Entered {
+                world,
+                lead: Lead::NoRef,
+            }))
+        };
+        if let Some(current) = current {
+            return world(current);
         }
         if let Some(RootHandle::Element(root)) = &self.target.root {
             // A handle's frames count as visible, as upstream's handle queries start from
@@ -380,7 +590,7 @@ impl<'a> Resolver<'a> {
                 frame_visible: true,
                 root: Some(site.node().to_owned()),
             };
-            return Ok(Ok(site.world().clone()));
+            return world(site.world().clone());
         }
         let main = match self
             .page
@@ -392,13 +602,13 @@ impl<'a> Resolver<'a> {
             Err(failure) => return Err(self.failed(failure)),
         };
         let Some(start) = &self.start else {
-            return Ok(Ok(main));
+            return world(main);
         };
         // Boxed: a walk of hops, inside every attempt of every locator op's future.
         let started = Box::pin(start.enter(self.page, self.scope, main)).await?;
-        Ok(match started {
+        match started {
             Started::Ready {
-                world,
+                world: started,
                 path,
                 visible,
             } => {
@@ -407,16 +617,14 @@ impl<'a> Resolver<'a> {
                     frame_visible: visible,
                     root: None,
                 };
-                Ok(*world)
+                world(*started)
             }
-            Started::Missing => Err(Step::Missing),
-            Started::Gone(world) => Err(Step::Gone(world)),
-            Started::Detached => {
-                return Err(self
-                    .scope
-                    .fail(ErrorCode::TargetClosed, "Frame was detached"));
-            }
-        })
+            Started::Missing => Ok(Err(Step::Missing)),
+            Started::Gone(world) => Ok(Err(Step::Gone(world))),
+            Started::Detached => Err(self
+                .scope
+                .fail(ErrorCode::TargetClosed, "Frame was detached")),
+        }
     }
 
     /// `website / element_detached`: the ref's element or document is gone, for good.
@@ -430,41 +638,33 @@ impl<'a> Resolver<'a> {
     }
 }
 
-/// One frame hop out of `parent`, through the `<iframe>` that `chunk` selects there:
+/// One frame hop out of `parent`, through the `<iframe>` that `hop` names there:
 ///
 /// ```text
-///  resolve { chunk, want: frame } ─ pin ─ pinned (by handle) ─ DOM.describeNode
+///  resolve { target, want: frame } ─ pin ─ pinned (by handle) ─ DOM.describeNode
 ///    ─ child frame id, cross-process? ─ core's FrameRegistry ─ the child's world
 /// ```
 ///
-/// The way into a child frame: the resolver hops along a locator's chunks, and a snapshot
-/// hops through each iframe ref it printed (`aria-ref=<ref>`). A frame start (`frame_start`)
+/// The way into a child frame: the resolver hops along a locator's chunks, each one aimed first
+/// (`resolve::tree_chunk`), so a hop's chunk can hold a role part. A frame start (`frame_start`)
 /// finds its iframes another way and shares the second half, [`enter_iframe`]. The child's
-/// parent link is recorded with the iframe's key, so a later ref jump into the frame finds
-/// its parents. Core owns the OOPIF sessions (decisions.md): the hop asks its registry and
-/// keeps no table of its own.
-pub(crate) async fn hop(
-    page: &OpPage<'_>,
-    scope: &OpScope<'_>,
-    parent: &IsolatedWorld,
-    chunk: &Chunk,
-    strictness: Strictness,
-) -> Result<Hopped, PlaywrightError> {
-    hop_from(page, scope, parent, chunk, strictness, None).await
-}
-
-/// [`hop`], with `chunk` queried from `root` (an element handle's node in `parent`'s world)
-/// instead of the document.
+/// parent link is recorded with the iframe's key, so a later ref jump into the frame finds its
+/// parents. Core owns the OOPIF sessions (decisions.md): the hop asks its registry and keeps no
+/// table of its own.
+///
+/// `root` is an element handle's node in `parent`'s world the chunk is queried from, else the
+/// document.
 async fn hop_from(
     page: &OpPage<'_>,
     scope: &OpScope<'_>,
     parent: &IsolatedWorld,
-    chunk: &Chunk,
+    hop: HopChunk<'_>,
     strictness: Strictness,
     root: Option<&str>,
 ) -> Result<Hopped, PlaywrightError> {
+    let HopChunk { chunk, target } = hop;
     let request = ProbeRequest::Resolve {
-        target: ProbeTarget::Chunk(ParsedSelector::of(chunk)),
+        target,
         strictness,
         want: Want::Frame,
     };
@@ -600,6 +800,9 @@ pub(super) async fn enter_iframe(
 
 /// `request` in `world`: from the document, or from `root` (an element handle's node there),
 /// which the probe reads as the call's root element.
+///
+/// A strict-mode violation the page decided comes back with the tree's role locators in its
+/// `aka` lines (`strict_akas`), the one place every request on a chunk answers through.
 pub(crate) async fn ask(
     scope: &OpScope<'_>,
     page: &OpPage<'_>,
@@ -607,10 +810,21 @@ pub(crate) async fn ask(
     request: &ProbeRequest,
     root: Option<&str>,
 ) -> Result<ProbeReply, ProbeFailure> {
-    match root {
+    let reply = match root {
         Some(root) => probe::call_on(scope, page, world, request, root).await,
         None => probe::call(scope, page, world, request).await,
-    }
+    }?;
+    Ok(match reply {
+        ProbeReply::Strict {
+            message,
+            listing: Some(listing),
+        } => ProbeReply::Strict {
+            // Boxed: a capture, inside every request's future.
+            message: Box::pin(strict_akas::worded(scope, page, world, message, listing)).await,
+            listing: None,
+        },
+        reply => reply,
+    })
 }
 
 /// Whether every `<iframe>` on `path` is visible in its parent, as a hop checks the one it goes
@@ -660,7 +874,7 @@ pub(crate) fn refused(scope: &OpScope<'_>, reply: ProbeReply) -> PlaywrightError
             stale_ref: Some(stale),
         } => detached(scope, &stale),
         // Upstream's message comes from an error thrown in the page, hence "Error: ".
-        ProbeReply::Strict { message } => {
+        ProbeReply::Strict { message, .. } => {
             scope.fail(ErrorCode::StrictModeViolation, &format!("Error: {message}"))
         }
         ProbeReply::Error { message, class, .. } => match class {
@@ -765,7 +979,7 @@ mod tests {
     use super::{Resolved, Resolver, Step, selector_text};
     use crate::op_scope::OpScope;
     use crate::page::OpPage;
-    use crate::probe::{ProbeReply, ProbeRequest, ProbeTarget, Read};
+    use crate::probe::{ProbeReply, ProbeRequest, Read};
     use crate::resolve::{HopIframe, Landed};
     use crate::target::{CallHeader, Chunk, LocatorTarget, Strictness, Target};
     use crate::test_support::fixture_server::{FixtureServer, nest_pages};
@@ -815,6 +1029,9 @@ mod tests {
         for _ in 0..100 {
             match resolver.resolve().await? {
                 Step::Ready(resolved) => return Ok(resolved),
+                Step::Answered(landed) => {
+                    return Err(format!("the chunk was answered: {:?}", landed.reply).into());
+                }
                 Step::Missing | Step::Gone(_) => time::sleep(Duration::from_millis(50)).await,
             }
         }
@@ -899,8 +1116,8 @@ mod tests {
 
         tab.main_world("document.querySelector('iframe[title=a1]').src = '/nest/b3.html'")
             .await?;
-        let read = |last, frame_visible| ProbeRequest::Read {
-            target: ProbeTarget::Chunk(last),
+        let read = |target, frame_visible| ProbeRequest::Read {
+            target,
             strictness: Strictness::Strict,
             frame_visible,
             read: Read::TextContent,

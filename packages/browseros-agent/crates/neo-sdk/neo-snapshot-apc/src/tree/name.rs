@@ -235,8 +235,20 @@ impl<'a> NameCache<'a> {
         let Some(slot) = slots.get(id.index()) else {
             return "";
         };
-        slot.get_or_init(|| compute_accessible_error_message(&self.index, id))
+        slot.get_or_init(|| compute_accessible_error_message(&self.index, id, Validity::Unknown))
             .as_str()
+    }
+
+    /// [`Self::error_message`] for an element the page reports invalid by its own constraint
+    /// validation (`validity.valid === false`): upstream's error message applies then whatever
+    /// `aria-invalid` says (`getValidityInvalid`), a fact the capture does not carry. Not
+    /// memoized: only a matcher on one element asks for it.
+    #[must_use]
+    pub fn error_message_when_invalid(&self, id: NodeId) -> String {
+        if id.index() >= self.index.tree.nodes().len() {
+            return String::new();
+        }
+        compute_accessible_error_message(&self.index, id, Validity::Invalid)
     }
 }
 
@@ -368,7 +380,7 @@ impl SnapshotTree {
     #[must_use]
     pub fn accessible_error_message(&self, id: NodeId) -> String {
         let index = LookupIndex::new(self);
-        compute_accessible_error_message(&index, id)
+        compute_accessible_error_message(&index, id, Validity::Unknown)
     }
 }
 
@@ -2040,7 +2052,20 @@ fn compute_accessible_description(
     }
 }
 
-fn compute_accessible_error_message(index: &LookupIndex<'_>, id: NodeId) -> String {
+/// What the page says of an element's constraint validation, which the capture does not carry.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Validity {
+    /// Not asked: `aria-invalid` alone decides, as for every element the tree reads.
+    Unknown,
+    /// The element fails its own constraint validation.
+    Invalid,
+}
+
+fn compute_accessible_error_message(
+    index: &LookupIndex<'_>,
+    id: NodeId,
+    validity: Validity,
+) -> String {
     let Some(node) = index.tree.node(id) else {
         return String::new();
     };
@@ -2054,8 +2079,11 @@ fn compute_accessible_error_message(index: &LookupIndex<'_>, id: NodeId) -> Stri
         return String::new();
     };
     // Match Playwright's `getElementAccessibleErrorMessage`: evaluate `aria-invalid` for every
-    // role, not only roles in `kAriaInvalidRoles`.
-    if InvalidState::from_aria_attr(browseros.aria_invalid.as_deref()) == InvalidState::False {
+    // role, not only roles in `kAriaInvalidRoles`, and an element that fails its constraint
+    // validation is invalid whatever `aria-invalid` says.
+    if validity == Validity::Unknown
+        && InvalidState::from_aria_attr(browseros.aria_invalid.as_deref()) == InvalidState::False
+    {
         return String::new();
     }
     if browseros.errormessage.is_empty() {
@@ -2335,6 +2363,44 @@ mod tests {
                 "descendant name-from-content mismatch for role {role}"
             );
         }
+    }
+
+    /// `aria-invalid="false"` hides the error message, unless the page reports the element
+    /// fails its own constraint validation (upstream's `getValidityInvalid`).
+    #[test]
+    fn an_element_invalid_by_validity_shows_its_error_message_whatever_aria_invalid_says()
+    -> Result<(), Box<dyn Error>> {
+        let tree = build_tree(
+            NodeBuilder::root()
+                .child(
+                    NodeBuilder::element("input")
+                        .dom_id(10)
+                        .aria_invalid("false")
+                        .errormessage(vec![BrowserOsRef {
+                            dom_node_id: Some(20),
+                            unrendered_text: None,
+                        }]),
+                )
+                .child(
+                    NodeBuilder::element("div")
+                        .dom_id(20)
+                        .child(NodeBuilder::text("Error message")),
+                ),
+        )?;
+        let input = node_id(&tree, "doc-main", 10)?;
+        let cache = tree.name_cache();
+        assert_eq!(
+            cache.error_message(input),
+            "",
+            "aria-invalid=false hides it"
+        );
+        assert_eq!(cache.error_message_when_invalid(input), "Error message");
+        assert_eq!(
+            cache.error_message_when_invalid(NodeId::new(9_999)),
+            "",
+            "an id past the tree reads empty"
+        );
+        Ok(())
     }
 
     #[test]

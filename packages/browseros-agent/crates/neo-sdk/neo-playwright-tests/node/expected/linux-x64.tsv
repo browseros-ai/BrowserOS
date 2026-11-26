@@ -4,11 +4,29 @@
 # id	outcome	file	title
 EH-096	skip	tests/page/elementhandle-scroll-into-view.spec.ts	should scroll display:contents into view
 EX-198	fail	tests/page/expect-misc.spec.ts	toHaveJSProperty › pass undefined
+EX-259	fail	tests/page/expect-to-have-accessible.spec.ts	toHaveAccessibleName
 FR-007	fail	tests/page/frame-evaluate.spec.ts	should allow cross-frame element handles
 FR-004	skip	tests/page/frame-evaluate.spec.ts	should dispose context on cross-origin navigation
 FR-003	skip	tests/page/frame-evaluate.spec.ts	should dispose context on navigation
 RO-158	skip	tests/page/interception.spec.ts	should intercept worker requests when enabled after worker creation
 LO-167	skip	tests/page/locator-query.spec.ts	should filter by regex with a single quote
+AR-056	fail	tests/page/page-aria-snapshot-ai.spec.ts	emit generic roles for nodes w/o roles
+AR-080	fail	tests/page/page-aria-snapshot-ai.spec.ts	return empty snapshot when iframe is not loaded
+AR-057	fail	tests/page/page-aria-snapshot-ai.spec.ts	should collapse generic nodes
+AR-086	fail	tests/page/page-aria-snapshot-ai.spec.ts	should collapse inline generic nodes
+AR-077	fail	tests/page/page-aria-snapshot-ai.spec.ts	should include active element information
+AR-087	fail	tests/page/page-aria-snapshot-ai.spec.ts	should inline single leaf generic child into parent generic
+AR-067	fail	tests/page/page-aria-snapshot-ai.spec.ts	should keep icon-only clickable elements
+AR-055	fail	tests/page/page-aria-snapshot-ai.spec.ts	should not generate refs for elements with pointer-events:none
+AR-061	fail	tests/page/page-aria-snapshot-ai.spec.ts	should omit redundant name when a contributing wrapper is collapsed
+AR-054	fail	tests/page/page-aria-snapshot-ai.spec.ts	should persist iframe references
+AR-070	fail	tests/page/page-aria-snapshot-ai.spec.ts	should resolve refs of distilled-away nodes
+AR-076	fail	tests/page/page-aria-snapshot-ai.spec.ts	should show visible children of hidden elements
+AR-083	fail	tests/page/page-aria-snapshot-ai.spec.ts	should snapshot a locator inside a frameset frame
+AR-082	fail	tests/page/page-aria-snapshot-ai.spec.ts	should snapshot frameset pages
+AR-052	fail	tests/page/page-aria-snapshot-ai.spec.ts	should stitch all frame snapshots
+AR-084	fail	tests/page/page-aria-snapshot-ai.spec.ts	should stitch iframes inside a frameset frame
+AR-085	fail	tests/page/page-aria-snapshot-ai.spec.ts	should stitch nested frameset documents
 AR-021	skip	tests/page/page-aria-snapshot.spec.ts	check aria-hidden text
 AR-036	skip	tests/page/page-aria-snapshot.spec.ts	match values both against regex and string
 AR-006	skip	tests/page/page-aria-snapshot.spec.ts	should allow text nodes
@@ -21,11 +39,13 @@ AR-031	skip	tests/page/page-aria-snapshot.spec.ts	should escape special yaml val
 AR-027	skip	tests/page/page-aria-snapshot.spec.ts	should escape yaml text in text nodes
 AR-029	skip	tests/page/page-aria-snapshot.spec.ts	should handle long strings
 AR-022	skip	tests/page/page-aria-snapshot.spec.ts	should ignore presentation and none roles
+AR-040	fail	tests/page/page-aria-snapshot.spec.ts	should include frames on frameset pages
 AR-017	skip	tests/page/page-aria-snapshot.spec.ts	should include new line for block pseudo
 AR-020	skip	tests/page/page-aria-snapshot.spec.ts	should include pseudo codepoints
 AR-015	skip	tests/page/page-aria-snapshot.spec.ts	should include pseudo in text
 AR-016	skip	tests/page/page-aria-snapshot.spec.ts	should not include hidden pseudo in text
 AR-032	skip	tests/page/page-aria-snapshot.spec.ts	should not report textarea textContent
+AR-033	fail	tests/page/page-aria-snapshot.spec.ts	should not show visible children of hidden elements
 AR-024	skip	tests/page/page-aria-snapshot.spec.ts	should not use on as checkbox value
 AR-004	skip	tests/page/page-aria-snapshot.spec.ts	should quote names that look like regexes
 AR-025	skip	tests/page/page-aria-snapshot.spec.ts	should respect aria-owns
@@ -86,7 +106,12 @@ PA-037	skip	tests/page/page-set-content.spec.ts	should handle timeout properly 2
 IF-002	fail	tests/page/page-set-input-files.spec.ts	should upload a folder
 SE-016	skip	tests/page/selectors-css.spec.ts	should work with :nth-child(of) notation with nested functions
 SE-090	skip	tests/page/selectors-get-by.spec.ts	getBy escaping
+SE-063	fail	tests/page/selectors-role.spec.ts	hidden with shadow dom slots
+SE-059	fail	tests/page/selectors-role.spec.ts	should filter hidden, unless explicitly asked for
+SE-055	fail	tests/page/selectors-role.spec.ts	should support disabled
 SE-057	skip	tests/page/selectors-role.spec.ts	should support disabled fieldset
+SE-061	fail	tests/page/selectors-role.spec.ts	should support option name with html whitespace
+SE-051	fail	tests/page/selectors-role.spec.ts	should support selected
 WO-001	skip	tests/page/workers.spec.ts	Page.workers @smoke
 WO-014	skip	tests/page/workers.spec.ts	should attribute network activity for worker inside iframe to the iframe
 WO-008	skip	tests/page/workers.spec.ts	should evaluate

@@ -1228,8 +1228,8 @@ fn node_with_text<'a>(node: &'a Value, text: &str) -> Option<&'a Value> {
 }
 
 /// A whole page's snapshot that runs out of time says which phase ran out, and answers at its
-/// timeout: its call log gives marking's time, then ends at the tree's read, the walk of the
-/// page that Playwright's engine was still doing. 40,000 rows take far longer than 300 ms.
+/// timeout: its call log ends at the tree's read, the APC capture the browser was still making.
+/// 40,000 rows take far longer than 300 ms.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
 async fn tests_that_a_page_snapshot_that_times_out_names_the_phase_that_ran_out() -> TestResult {
@@ -1258,12 +1258,11 @@ async fn tests_that_a_page_snapshot_that_times_out_names_the_phase_that_ran_out(
         Some(ErrorCode::WaitTimeout),
         "{message}"
     );
-    assert!(message.contains("clickable marking"), "{message}");
     let last = message.trim_end().lines().last().unwrap_or_default();
     assert!(
         last.contains("- reading the main frame's tree: unfinished after ")
             && last.ends_with(" ms"),
-        "the walk is the phase that ran out, with its time: {message}"
+        "the capture is the phase that ran out, with its time: {message}"
     );
     assert!(
         took < Duration::from_millis(1_300),
@@ -1272,15 +1271,16 @@ async fn tests_that_a_page_snapshot_that_times_out_names_the_phase_that_ran_out(
     live.close(&page).await
 }
 
-/// Marking never removes a ref or a mark: every ref, and every `cursor: pointer`, of the snapshot
-/// taken without marking is in the one taken with it, page and locator alike. The containers are
-/// left out as targets, so the rows and the empty tile inside them (an owned one included) keep
-/// their own marks and the list's items gain theirs; the listener-only `div`, the empty listener tile and the `tabindex`
-/// card gain theirs too. An unmarked snapshot after a marked one is the first one again: the
-/// engine reads every real cursor once the marked call is over.
+/// What Chromium reports clickable comes with the APC tree itself: every ai snapshot marks it,
+/// page and locator alike, and `clickable: true` changes nothing (the per-frame `DOMSnapshot` scan
+/// it once started is gone). The page's own pointer rows, the listener-only list items, `div`
+/// and empty tile are marked, and so is a `tabindex` card with text, which holds no other target.
+/// APC carries no `aria-owns`, so the `tabindex` box that owns a pointer row elsewhere holds none
+/// in the tree and takes clicks itself, where the old scan followed the relation.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT (default 9005)"]
-async fn tests_that_clickable_marking_adds_refs_and_marks_and_never_removes_one() -> TestResult {
+async fn tests_that_the_tree_marks_what_chromium_reports_clickable_with_or_without_the_switch()
+-> TestResult {
     let _alone = ALONE.acquire().await?;
     let live = LiveBrowser::connect().await?;
     let pages = HashMap::from([(
@@ -1300,52 +1300,28 @@ async fn tests_that_clickable_marking_adds_refs_and_marks_and_never_removes_one(
         let mut marking = input.clone();
         marking["clickable"] = json!(true);
         let marked = live.invoke(op, marking).await??;
-        let again = live.invoke(op, input).await??;
-        assert_eq!(again, plain, "{op}: nothing of the marked call outlives it");
-        let (plain_refs, plain_marks) = refs_and_marks(field(&plain, "json"));
-        let (marked_refs, marked_marks) = refs_and_marks(field(&marked, "json"));
-        assert!(
-            plain_refs.is_subset(&marked_refs),
-            "{op}: marking removed refs {:?}",
-            plain_refs.difference(&marked_refs).collect::<Vec<_>>()
-        );
-        assert!(
-            plain_marks.is_subset(&marked_marks),
-            "{op}: marking removed marks {:?}",
-            plain_marks.difference(&marked_marks).collect::<Vec<_>>()
-        );
-        // The slotted row has no ref of upstream's to keep: the subset checks above cover it.
-        for row in ["Row one", "Owned row"] {
-            let printed = ref_with_text(field(&plain, "json"), row)
-                .ok_or_else(|| format!("{op}: {row} prints: {plain}"))?;
-            assert!(
-                plain_marks.contains(&printed),
-                "{op}: the page's own {row} is marked"
-            );
-        }
-        for item in ["Item A", "Item B"] {
-            let item = ref_with_text(field(&marked, "json"), item).ok_or("the item prints")?;
-            assert!(
-                marked_marks.contains(&item),
-                "{op}: a listener-only item gains its mark; its tabindex list is no target"
-            );
-        }
-        let menu = ref_with_text(field(&marked, "json"), "Open menu").ok_or("the menu prints")?;
-        let card = ref_with_text(field(&marked, "json"), "Card text").ok_or("the card prints")?;
-        assert!(
-            !plain_marks.contains(&menu) && marked_marks.contains(&menu),
-            "{op}: the listener-only div gains its mark"
-        );
-        assert!(
-            marked_marks.contains(&card),
-            "{op}: the tabindex card gains its mark"
-        );
         assert_eq!(
-            marked_marks.len(),
-            plain_marks.len() + 5,
-            "{op}: exactly the menu, the empty tile, the card and the two items gain a mark, no \
-             container does: {marked}"
+            field(&marked, "json"),
+            field(&plain, "json"),
+            "{op}: the switch changes nothing"
         );
+        let (_, marks) = refs_and_marks(field(&plain, "json"));
+        for text in [
+            "Row one",
+            "Pointer row A",
+            "Pointer row B",
+            "Owned row",
+            "Slotted row",
+            "Item A",
+            "Item B",
+            "Open menu",
+            "Card text",
+            "Owner",
+        ] {
+            let printed = ref_with_text(field(&plain, "json"), text)
+                .ok_or_else(|| format!("{op}: {text} prints: {plain}"))?;
+            assert!(marks.contains(&printed), "{op}: {text} is marked: {plain}");
+        }
     }
     live.close(&page).await
 }

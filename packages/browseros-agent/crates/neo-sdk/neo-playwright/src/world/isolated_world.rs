@@ -29,6 +29,9 @@ pub(crate) const ENGINE_WORLD: &str = "browseros-engine";
 /// op asked for.
 const WORLD_GROUP: &str = "browseros-sdk-world";
 
+/// [`IsolatedWorld::document_has_body`]'s question, asked of the world's own document.
+const DOCUMENT_HAS_BODY: &str = "function() { return document.body !== null; }";
+
 /// How `Runtime.evaluate` refuses a `uniqueContextId` that names no live context (measured on
 /// BrowserOS: an unknown id, and a world whose document moved to another renderer).
 const UNIQUE_CONTEXT_GONE: &str = "uniqueContextId not found";
@@ -319,6 +322,17 @@ impl IsolatedWorld {
         &self.global
     }
 
+    /// Whether this world's document has its body yet: `document.body`, the `<body>` or the
+    /// outermost `<frameset>` of a frameset document, which upstream's snapshot polls the main
+    /// frame for (`body,frameset`) before it reads it. A fixed internal script, so it takes the
+    /// internal gateway below.
+    pub(crate) async fn document_has_body(&self) -> Result<bool, CoreError> {
+        let has = self
+            .call_for_screenshot(DOCUMENT_HAS_BODY, &json!([]))
+            .await?;
+        Ok(has == Value::Bool(true))
+    }
+
     /// Runs an internal screenshot rendering or geometry script in this held isolated world.
     /// Screenshot code may read layout numbers here; agent-provided functions never enter this
     /// gateway. The held global prevents a recycled numeric context from changing the world.
@@ -362,7 +376,6 @@ impl IsolatedWorld {
     }
 
     /// Logical timestamp recorded when this world finished installing.
-    #[cfg_attr(not(test), expect(dead_code, reason = "wired by the switch-over"))]
     pub(crate) const fn installed_at(&self) -> Stamp {
         self.installed_at
     }

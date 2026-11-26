@@ -1,21 +1,31 @@
 //! The expect ops, their registration metadata, and the polls they run.
 
+use std::sync::{Mutex, PoisonError};
+
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use ts_rs::TS;
 
-use crate::expect::expectation::{Expectation, MatcherArgs, Poll, Subject};
+use neo_snapshot_apc::tree::{AriaRoot, DocId, NameCache, NodeId, SnapshotTree, TreeDoc};
+
+use crate::expect::aria_expect::{self, AriaExpect, AriaExpectError, FailureSnapshot, Visibility};
+use crate::expect::expectation::{
+    Expectation, FailedOn, FailedPollSnapshot, MatcherArgs, Poll, Subject,
+};
 use crate::listed_enum::listed_enum;
 use crate::op_input::OpArgs;
 use crate::op_scope::OpScope;
 use crate::op_spec::{OpSpec, PAGE, TARGET};
-use crate::page::{OpPage, document_op};
-use crate::probe::{ExpectParams, ProbeFailure, ProbeRequest, ProbeTarget};
+use crate::page::OpPage;
+use crate::probe::{
+    self, ExpectParams, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Read, Want,
+};
 use crate::resolve::{self, Landed, Resolver};
-use crate::target::{PageRef, Target};
+use crate::target::{PageRef, Strictness, Target};
+use crate::tree::{AttemptStart, TreeAsk};
 use crate::wire::{self, Command, Describe, Nothing, OpWire, Route, Run, options};
-use crate::world::Place;
-use crate::{ErrorCode, Playwright, PlaywrightError, locator_handler};
+use crate::world::{IsolatedWorld, Pin, Place};
+use crate::{ErrorCode, Playwright, PlaywrightError, locator_handler, snapshot};
 
 listed_enum! {
     /// Retrying matchers. Non-retrying value matchers (`toBe`, `toEqual`, ...) run in the
@@ -377,7 +387,8 @@ const FRAME_EXPECT: Command = wire::command("Frame.expect")
     ]);
 
 /// A locator matcher: each poll re-resolves the locator, frames included, and checks it in
-/// the last chunk's world, as upstream's `callOnSelector` does.
+/// the last chunk's world, as upstream's `callOnSelector` does. The accessibility matchers and
+/// `toMatchAriaSnapshot` check it in the tab's APC tree instead ([`tree_poll`]).
 async fn locator(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -397,30 +408,249 @@ async fn locator(
         ));
     };
     let expect = Expectation::new(Subject::Locator(target.display.clone()), args, scope)?;
+    let aria = AriaExpect::new(expect.params()).transpose();
     let page = OpPage::admit_handle(pw, scope, &target.page).await?;
     let resolver = Resolver::new(&page, scope, &target, expect.strictness());
+    // The element the last page poll ran on, for the one failure snapshot read when the op
+    // fails (`Expectation::run`); a tree poll carries its own, read from its own capture.
+    let polled_on: Mutex<Option<Sent>> = Mutex::new(None);
     let poll = || async {
-        let request = |last, frame_visible| expect.request(ProbeTarget::Chunk(last), frame_visible);
+        if let Some(aria) = &aria {
+            return tree_poll(scope, &page, &resolver, &expect, aria).await;
+        }
+        let request = |target, frame_visible| expect.request(target, frame_visible);
         match resolver.attempt_at(request).await? {
-            Some(Landed { reply, .. }) => expect.poll_of(scope, reply),
+            Some(Landed {
+                reply, world, sent, ..
+            }) => {
+                *polled_on.lock().unwrap_or_else(PoisonError::into_inner) =
+                    sent.map(|sent| Sent::from((world, sent)));
+                expect.poll_of(scope, reply)
+            }
             None => Ok(expect.nothing_found()),
         }
     };
-    // Upstream snapshots the body of the frame `expect` ran on, the locator's own frame, not
-    // the frame its last chunk enters.
-    let root_snapshot = || document_op::expect_snapshot(&page, scope, target.frame.as_ref());
+    let (page_ref, expect_ref, polled_ref) = (&page, &expect, &polled_on);
+    let frame = target.frame.as_ref();
+    let failure_snapshot = |on| async move {
+        match (on, expect_ref.failed_poll_snapshot()) {
+            // Upstream snapshots the body of the frame `expect` ran on, the locator's own
+            // frame, not the frame its last chunk enters.
+            (FailedOn::Nothing, _) | (FailedOn::Element, FailedPollSnapshot::Body) => {
+                snapshot::expect_body_snapshot(scope, page_ref, frame).await
+            }
+            (FailedOn::Element, FailedPollSnapshot::Nothing) => None,
+            (FailedOn::Element, FailedPollSnapshot::OwnLine) => {
+                let element = polled_ref
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take()?;
+                element_failure_snapshot(scope, page_ref, expect_ref, element, Some(1)).await
+            }
+            (FailedOn::Element, FailedPollSnapshot::Whole) => {
+                let element = polled_ref
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .take()?;
+                element_failure_snapshot(scope, page_ref, expect_ref, element, None).await
+            }
+        }
+    };
     expect
         .run(
             scope,
             || locator_handler::checkpoint(scope, &page),
             poll,
-            root_snapshot,
+            failure_snapshot,
         )
         .await
 }
 
-/// A page matcher, on the main frame's document (upstream's `:root`; the probe matches an aria
-/// template from its `body`, as upstream does).
+/// One poll of a matcher the tree answers (design 5.6): the locator's one element, pinned by
+/// the resolver, then found in a capture taken after that, and read there. The params' error, a
+/// regex that does not compile or a template that cannot run, is raised once a poll has found
+/// the element, as upstream's page throws it.
+async fn tree_poll(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    resolver: &Resolver<'_>,
+    expect: &Expectation,
+    aria: &Result<AriaExpect, AriaExpectError>,
+) -> Result<Poll, PlaywrightError> {
+    let request = |target, _frame_visible| ProbeRequest::Resolve {
+        target,
+        strictness: expect.strictness(),
+        want: Want::Element,
+    };
+    let Some(Landed {
+        reply, world, sent, ..
+    }) = resolver.attempt_at(request).await?
+    else {
+        return Ok(expect.nothing_found());
+    };
+    let frame_visible = sent.as_ref().is_none_or(|sent| sent.frame_visible);
+    let (pin, preview) = match reply {
+        ProbeReply::Element { pin, preview, .. } => (pin, preview),
+        other => return expect.poll_of(scope, other),
+    };
+    let aria = aria
+        .as_ref()
+        .map_err(|error| expect.refused_matcher(scope, &error.to_string()))?;
+    let Some(found) = snapshot::element_in_tree(scope, page, &world, pin).await? else {
+        return Ok(expect.nothing_found());
+    };
+    let tree = found.captured.tree();
+    let verdict = match aria {
+        AriaExpect::Property(matcher) => {
+            let validity = if matcher.reads_validity() {
+                page_validity(scope, page, &world, pin).await?
+            } else {
+                aria_expect::Validity::NotRead
+            };
+            let names = NameCache::new(tree);
+            matcher.check(tree, &names, found.node, validity)
+        }
+        AriaExpect::Template(matcher) => {
+            let Some(roots) = found.roots(scope, page, &world, pin).await? else {
+                return Ok(expect.nothing_found());
+            };
+            matcher
+                .check_roots(tree, &roots)
+                .map_err(|error| expect.refused_matcher(scope, &error.to_string()))?
+        }
+    };
+    // Upstream attaches the element's own line, or its frame's body when it is hidden, to a
+    // property poll that failed; a template poll attaches none.
+    let aria_snapshot = match aria {
+        AriaExpect::Property(_) if verdict.matches == expect.is_not() => {
+            failure_snapshot(page, tree, found.doc, found.node, frame_visible, Some(1))
+        }
+        AriaExpect::Property(_) | AriaExpect::Template(_) => None,
+    };
+    Ok(Poll::Ran {
+        matches: verdict.matches,
+        resolved: preview,
+        received: Some(expect.printed(verdict.received)),
+        aria_snapshot,
+    })
+}
+
+/// The element a page poll ran its matcher on: the world the poll ran in, what its request
+/// named there, and whether every frame on the way is visible.
+struct Sent {
+    world: IsolatedWorld,
+    target: ProbeTarget,
+    frame_visible: bool,
+}
+
+impl From<(IsolatedWorld, resolve::SentRequest)> for Sent {
+    fn from((world, sent): (IsolatedWorld, resolve::SentRequest)) -> Self {
+        Self {
+            world,
+            target: sent.target,
+            frame_visible: sent.frame_visible,
+        }
+    }
+}
+
+/// The failure snapshot of the element the last page poll ran on, at `depth` (`None`: whole):
+/// it is pinned once more in that poll's world and found in a capture taken after that (design
+/// 6.2), since the page's engine prints none. `None` when it is gone or cannot be read: the
+/// snapshot is best effort, as it leaves the failure itself as it is.
+async fn element_failure_snapshot(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    expect: &Expectation,
+    element: Sent,
+    depth: Option<usize>,
+) -> Option<String> {
+    let request = ProbeRequest::Resolve {
+        target: element.target,
+        strictness: expect.strictness(),
+        want: Want::Element,
+    };
+    let Ok(ProbeReply::Element { pin, .. }) =
+        probe::call(scope, page, &element.world, &request).await
+    else {
+        return None;
+    };
+    let found = snapshot::element_in_tree(scope, page, &element.world, pin)
+        .await
+        .ok()
+        .flatten()?;
+    let tree = found.captured.tree();
+    failure_snapshot(
+        page,
+        tree,
+        found.doc,
+        found.node,
+        element.frame_visible,
+        depth,
+    )
+}
+
+/// Whether the pinned element fails its own constraint validation, read from the page in the
+/// world that pinned it: the one fact `toHaveAccessibleErrorMessage` reads beside the tree. A
+/// world gone since the pin reads as valid; the next poll pins again.
+async fn page_validity(
+    scope: &OpScope<'_>,
+    page: &OpPage<'_>,
+    world: &IsolatedWorld,
+    pin: Pin,
+) -> Result<aria_expect::Validity, PlaywrightError> {
+    let request = ProbeRequest::Read {
+        target: ProbeTarget::Pin(pin),
+        strictness: Strictness::Strict,
+        frame_visible: true,
+        read: Read::ValidityInvalid,
+    };
+    match probe::call(scope, page, world, &request).await {
+        Ok(ProbeReply::Read { value, .. }) => Ok(if value.into_value() == Value::Bool(true) {
+            aria_expect::Validity::Invalid
+        } else {
+            aria_expect::Validity::Valid
+        }),
+        Ok(ProbeReply::Detached) | Err(ProbeFailure::Gone(_)) => Ok(aria_expect::Validity::Valid),
+        Ok(other) => Err(resolve::refused(scope, other)),
+        Err(failure) => Err(resolve::failed(scope, failure)),
+    }
+}
+
+/// A failed poll's aria snapshot (`aria_expect::FailureSnapshot`): the element in default mode
+/// to `depth` (`None`: whole), or the body of its frame when the frame or the element is hidden
+/// or the tree has no node for it. `None` when it prints nothing.
+fn failure_snapshot(
+    page: &OpPage<'_>,
+    tree: &SnapshotTree,
+    doc: DocId,
+    node: Option<NodeId>,
+    frame_visible: bool,
+    depth: Option<usize>,
+) -> Option<String> {
+    let visible = node
+        .and_then(|node| tree.node(node))
+        .is_some_and(|node| node.hidden().is_box_visible());
+    let element = Visibility {
+        frame: frame_visible,
+        element: visible,
+    };
+    let (root, depth) = match (FailureSnapshot::for_failed_poll(element), node) {
+        (FailureSnapshot::Element, Some(node)) => (AriaRoot::Subtree(node), depth),
+        (FailureSnapshot::Element | FailureSnapshot::Body, _) => (AriaRoot::Document(doc), None),
+    };
+    let ask = TreeAsk {
+        ai: false,
+        root,
+        depth,
+        boxes: false,
+    };
+    let snapshot = page.tree().aria(tree, ask).ok()?.into_snapshot();
+    let text = neo_snapshot::render(&snapshot, neo_snapshot::Call::Playwright).into_text();
+    Some(text).filter(|text| !text.is_empty())
+}
+
+/// A page matcher, on the main frame's document (upstream's `:root`; an aria template matches
+/// from its `body`, as upstream does, which the tree reads as the main document).
 async fn page(
     pw: &Playwright,
     scope: &OpScope<'_>,
@@ -431,16 +661,59 @@ async fn page(
         args,
     } = input.split();
     let expect = Expectation::new(Subject::Page, args, scope)?;
+    let aria = AriaExpect::new(expect.params()).transpose();
     let page = OpPage::admit_handle(pw, scope, &page).await?;
     let request = expect.request(ProbeTarget::Document, true);
     expect
         .run(
             scope,
             || locator_handler::checkpoint(scope, &page),
-            || main_frame(&page, scope, &expect, &request),
-            || document_op::expect_snapshot(&page, scope, None),
+            || async {
+                match &aria {
+                    Some(aria) => main_document_poll(&page, scope, &expect, aria).await,
+                    None => main_frame(&page, scope, &expect, &request).await,
+                }
+            },
+            |_| snapshot::expect_body_snapshot(scope, &page, None),
         )
         .await
+}
+
+/// One poll of a page matcher the tree answers: an aria template against the main document of
+/// a fresh capture. A capture with no main document yet reads as nothing there for this poll.
+async fn main_document_poll(
+    page: &OpPage<'_>,
+    scope: &OpScope<'_>,
+    expect: &Expectation,
+    aria: &Result<AriaExpect, AriaExpectError>,
+) -> Result<Poll, PlaywrightError> {
+    let aria = aria
+        .as_ref()
+        .map_err(|error| expect.refused_matcher(scope, &error.to_string()))?;
+    let AriaExpect::Template(matcher) = aria else {
+        // The property matchers are a locator's only: no page matcher sends one.
+        return Err(scope.fail(
+            ErrorCode::Internal,
+            "an accessibility property matcher on a page",
+        ));
+    };
+    let captured = page
+        .tree()
+        .capture_seeded(scope, page, AttemptStart::now())
+        .await?;
+    let tree = captured.tree();
+    let Some(doc) = tree.main_document().map(TreeDoc::id) else {
+        return Ok(Poll::Missing);
+    };
+    let verdict = matcher
+        .check_roots(tree, &[AriaRoot::Document(doc)])
+        .map_err(|error| expect.refused_matcher(scope, &error.to_string()))?;
+    Ok(Poll::Ran {
+        matches: verdict.matches,
+        resolved: "<body>".to_owned(),
+        received: Some(expect.printed(verdict.received)),
+        aria_snapshot: None,
+    })
 }
 
 /// One poll of the main frame, on the document's root. A navigation that replaced the document

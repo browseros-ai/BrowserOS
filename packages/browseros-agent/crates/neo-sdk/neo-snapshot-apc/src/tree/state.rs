@@ -3,6 +3,7 @@ use crate::proto::{
 };
 
 use super::hidden;
+use super::node_key::DocToken;
 use super::role::{self, Role};
 use super::tree_doc::TreeDoc;
 use super::tree_node::TreeNode;
@@ -66,8 +67,16 @@ pub struct State {
     disabled: Option<bool>,
     is_disabled: bool,
     invalid: Option<InvalidState>,
-    active: bool,
+    focus: Focus,
     inert: bool,
+}
+
+/// What upstream reads of focus for one node: whether it holds focus in its document, and
+/// whether it is its document's active element while that document has focus.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Focus {
+    focused: bool,
+    active_element: bool,
 }
 
 impl State {
@@ -125,7 +134,16 @@ impl State {
     /// Whether this element holds keyboard focus in its owning document.
     #[must_use]
     pub const fn active(self) -> bool {
-        self.active
+        self.focus.focused
+    }
+
+    /// Whether this element is its document's `activeElement` while that document has focus:
+    /// upstream's ai-mode `[active]` (`ariaSnapshot.ts`, `activeElement === element &&
+    /// document.hasFocus()`), which also names the `<body>` of a focused document with no focused
+    /// element and the `<iframe>` that leads to the focused frame ([`active_elements`]).
+    #[must_use]
+    pub const fn active_element(self) -> bool {
+        self.focus.active_element
     }
 
     /// Whether this element's own computed style is inert (never inherited across descendants).
@@ -255,7 +273,9 @@ pub(crate) fn compute_states(
     nodes: &[TreeNode],
     docs: &[TreeDoc],
     roles: &[Option<Role>],
+    focused_frame: Option<&DocToken>,
 ) -> Vec<State> {
+    let active_elements = active_elements(nodes, docs, focused_frame);
     let mut states = Vec::with_capacity(nodes.len());
     let mut effective_aria_disabled = Vec::with_capacity(nodes.len());
 
@@ -297,6 +317,7 @@ pub(crate) fn compute_states(
             .get(node.doc().index())
             .and_then(TreeDoc::focused_node_id);
         let active = node.dom_node_id().is_some() && node.dom_node_id() == doc_focused;
+        let active_element = active_elements.get(index).copied().unwrap_or(false);
         let inert = browseros.is_some_and(|b| b.inert == Some(true));
 
         states.push(State {
@@ -308,7 +329,10 @@ pub(crate) fn compute_states(
             disabled,
             is_disabled,
             invalid: compute_invalid(role, browseros),
-            active,
+            focus: Focus {
+                focused: active,
+                active_element,
+            },
             inert,
         });
     }
@@ -316,9 +340,209 @@ pub(crate) fn compute_states(
     states
 }
 
+/// Each node's [`State::active_element`]. A document has focus when it is the page's focused frame
+/// (`PageInteractionInfo.focused_frame`) or embeds it; there its active element is its focused
+/// node, or the `<iframe>` on the way to the focused frame, or else its body element, as a
+/// browser's `document.activeElement` answers. A document without focus has none. A reply that
+/// names no focused frame keeps each document's own focused node, the one fact it does carry.
+fn active_elements(
+    nodes: &[TreeNode],
+    docs: &[TreeDoc],
+    focused_frame: Option<&DocToken>,
+) -> Vec<bool> {
+    let focused_in_its_doc = |node: &TreeNode| {
+        node.dom_node_id().is_some()
+            && node.dom_node_id()
+                == docs
+                    .get(node.doc().index())
+                    .and_then(TreeDoc::focused_node_id)
+    };
+    let Some(focused_doc) =
+        focused_frame.and_then(|token| docs.iter().position(|doc| doc.token() == token))
+    else {
+        return nodes.iter().map(focused_in_its_doc).collect();
+    };
+    let mut active = vec![false; nodes.len()];
+    let mut element = None;
+    let mut body = None;
+    for (index, node) in nodes.iter().enumerate() {
+        if node.doc().index() != focused_doc {
+            continue;
+        }
+        if focused_in_its_doc(node) {
+            element = Some(index);
+            break;
+        }
+        if body.is_none() && node.raw_attributes().is_some_and(is_body_element) {
+            body = Some(index);
+        }
+    }
+    if let Some(slot) = element.or(body).and_then(|index| active.get_mut(index)) {
+        *slot = true;
+    }
+    // Up the frames: in each embedding document, the iframe that holds the focused one.
+    let mut at = focused_doc;
+    for _ in 0..docs.len() {
+        let Some(iframe) = docs.get(at).and_then(TreeDoc::iframe_node) else {
+            break;
+        };
+        let Some(slot) = active.get_mut(iframe.index()) else {
+            break;
+        };
+        *slot = true;
+        let Some(parent) = nodes.get(iframe.index()).map(|node| node.doc().index()) else {
+            break;
+        };
+        at = parent;
+    }
+    active
+}
+
+/// The HTML spec's body element: the `<body>`, or a frameset document's outermost `<frameset>`,
+/// which comes first in document order.
+fn is_body_element(raw: &ContentAttributes) -> bool {
+    hidden::raw_tag(raw)
+        .is_some_and(|tag| tag.eq_ignore_ascii_case("body") || tag.eq_ignore_ascii_case("frameset"))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::error::Error;
+
+    use crate::proto::FormControlType;
+    use crate::tree::{
+        ApcBuilder, BuildOptions, DocToken, DomNodeId, FrameBuilder, NodeBuilder, NodeKey,
+        SnapshotTree,
+    };
+
     use super::InvalidState;
+
+    /// `<html><body id=3><button id=4>`: the document every focus case below starts from.
+    fn page(body: i32, button: i32) -> NodeBuilder {
+        NodeBuilder::root().child(
+            NodeBuilder::element("html").child(
+                NodeBuilder::element("body").dom_id(body).child(
+                    NodeBuilder::form_control(FormControlType::ButtonButton)
+                        .dom_id(button)
+                        .tag("button")
+                        .child(NodeBuilder::text("Go")),
+                ),
+            ),
+        )
+    }
+
+    /// Whether the element `dom` of document `doc` is its document's active element.
+    fn active(tree: &SnapshotTree, doc: &str, dom: i32) -> Result<bool, Box<dyn Error>> {
+        let token = DocToken::new(doc).ok_or("a document token")?;
+        let node = tree
+            .node_by_key(&NodeKey::new(token, DomNodeId::new(dom)))
+            .ok_or("an element of the page")?;
+        Ok(node.state().active_element())
+    }
+
+    #[test]
+    fn tests_that_a_focused_document_with_nothing_focused_names_its_body()
+    -> Result<(), Box<dyn Error>> {
+        let apc = ApcBuilder::new("doc-main")
+            .focused_frame("doc-main")
+            .root(page(3, 4))
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        assert!(
+            active(&tree, "doc-main", 3)?,
+            "the body, as document.activeElement"
+        );
+        assert!(!active(&tree, "doc-main", 4)?);
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_focused_element_is_active_and_its_body_is_not() -> Result<(), Box<dyn Error>> {
+        let apc = ApcBuilder::new("doc-main")
+            .focused_frame("doc-main")
+            .main_focused_node_id(4)
+            .root(page(3, 4))
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        assert!(active(&tree, "doc-main", 4)?);
+        assert!(!active(&tree, "doc-main", 3)?);
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_focus_in_a_frame_marks_its_iframe_and_its_own_element()
+    -> Result<(), Box<dyn Error>> {
+        let child = FrameBuilder::new("doc-child")
+            .focused_node_id(8)
+            .root(page(7, 8));
+        let apc = ApcBuilder::new("doc-main")
+            .focused_frame("doc-child")
+            .root(
+                NodeBuilder::root().child(
+                    NodeBuilder::element("html").child(
+                        NodeBuilder::element("body")
+                            .dom_id(3)
+                            .child(NodeBuilder::iframe(child).dom_id(5)),
+                    ),
+                ),
+            )
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        assert!(
+            active(&tree, "doc-main", 5)?,
+            "the iframe on the way to the focus"
+        );
+        assert!(!active(&tree, "doc-main", 3)?, "not the embedding body");
+        assert!(
+            active(&tree, "doc-child", 8)?,
+            "the frame's focused element"
+        );
+        assert!(!active(&tree, "doc-child", 7)?);
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_document_without_focus_has_no_active_element() -> Result<(), Box<dyn Error>> {
+        let child = FrameBuilder::new("doc-child")
+            .focused_node_id(8)
+            .root(page(7, 8));
+        let apc = ApcBuilder::new("doc-main")
+            .focused_frame("doc-main")
+            .root(
+                NodeBuilder::root().child(
+                    NodeBuilder::element("html").child(
+                        NodeBuilder::element("body")
+                            .dom_id(3)
+                            .child(NodeBuilder::iframe(child).dom_id(5)),
+                    ),
+                ),
+            )
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        assert!(active(&tree, "doc-main", 3)?);
+        assert!(
+            !active(&tree, "doc-child", 8)?,
+            "a frame the page's focus is not in, as document.hasFocus() is false there"
+        );
+        assert!(!active(&tree, "doc-main", 5)?);
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_a_reply_naming_no_focused_frame_keeps_each_documents_focused_node()
+    -> Result<(), Box<dyn Error>> {
+        let apc = ApcBuilder::new("doc-main")
+            .main_focused_node_id(4)
+            .root(page(3, 4))
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        assert!(active(&tree, "doc-main", 4)?);
+        assert!(
+            !active(&tree, "doc-main", 3)?,
+            "no body without a focused frame"
+        );
+        Ok(())
+    }
 
     #[test]
     fn invalid_state_from_aria_attr_matches_playwright() {

@@ -773,7 +773,22 @@ fn emit_aria(tree: &SnapshotTree, ask: AriaAsk<'_>) -> Result<AriaTree, AriaTooD
         emit_order.push(job.job_idx);
         let emitted = match emit_single_doc(tree, &name_cache, &mut mode, &job, boxes, scale) {
             Ok(frames) => {
-                let scheduled = schedule_child_jobs(frames.iframe_slots, &job, &mut emitted_docs);
+                // Only ai mode reads past an iframe: a child frame's snapshot hangs from its
+                // iframe's ref, and default mode mints none, so it reads one document as
+                // upstream's `ariaSnapshot` and template matcher read one frame (`- iframe`).
+                let slots = if mode.is_ai() {
+                    frames.iframe_slots
+                } else {
+                    frames
+                        .iframe_slots
+                        .into_iter()
+                        .map(|slot| EmittedIframe {
+                            kind: EmittedIframeKind::Empty,
+                            ..slot
+                        })
+                        .collect()
+                };
+                let scheduled = schedule_child_jobs(slots, &job, &mut emitted_docs);
                 job_stack.extend(scheduled.jobs.into_iter().rev());
                 EmittedDoc::Frames {
                     nodes: frames.nodes,
@@ -927,15 +942,27 @@ fn emit_single_doc(
 
     // The cap keeps every AriaNode tree within MAX_TREE_DEPTH levels. When it, and not the asked
     // depth, would cut content, the document is refused rather than shown incomplete.
-    let effective_max_depth = job.depth.print_cut().map_or(MAX_SINGLE_FRAME_DEPTH, |cut| {
+    let mut effective_max_depth = job.depth.print_cut().map_or(MAX_SINGLE_FRAME_DEPTH, |cut| {
         cut.min(MAX_SINGLE_FRAME_DEPTH)
     });
     if effective_max_depth == MAX_SINGLE_FRAME_DEPTH {
         let levels = draft_levels(&arena);
-        if levels > MAX_TREE_DEPTH {
+        // The reader's 297 levels of JSON hold one level more than MAX_TREE_DEPTH when the
+        // deepest nodes are bare leaves (no box, no child array: `neo_snapshot::MAX_TREE_DEPTH`),
+        // so a document that ends in such leaves one level past it is no deeper than one the
+        // page's engine returned.
+        let bare_extra_level = levels == MAX_TREE_DEPTH + 1
+            && job.levels_above == 0
+            && !boxes
+            && deepest_drafts_are_bare(&arena, levels);
+        if levels > MAX_TREE_DEPTH && !bare_extra_level {
             return Err(AriaTooDeep {
                 levels: job.levels_above + levels,
             });
+        }
+        // Those leaves are materialized, not cut at the usual last level.
+        if bare_extra_level {
+            effective_max_depth += 1;
         }
     }
     let frame_origin = if boxes {
@@ -977,6 +1004,41 @@ fn draft_levels(arena: &DraftArena) -> usize {
         }
     }
     deepest
+}
+
+/// Whether every draft at `level` (top-level drafts are level 1) is a leaf that writes no child
+/// array: no node child and at most one string, which the node then carries as its `text`.
+fn deepest_drafts_are_bare(arena: &DraftArena, level: usize) -> bool {
+    let mut stack: Vec<(usize, usize)> = arena.nodes.first().map_or_else(Vec::new, |root| {
+        root.children
+            .iter()
+            .filter_map(|child| match child {
+                DraftChild::Node(idx) => Some((*idx, 1)),
+                DraftChild::Text(_) => None,
+            })
+            .collect()
+    });
+    while let Some((idx, at)) = stack.pop() {
+        let Some(node) = arena.nodes.get(idx) else {
+            continue;
+        };
+        if at == level {
+            let nodes = node
+                .children
+                .iter()
+                .filter(|child| matches!(child, DraftChild::Node(_)))
+                .count();
+            if nodes > 0 || node.children.len() > 1 {
+                return false;
+            }
+            continue;
+        }
+        stack.extend(node.children.iter().filter_map(|child| match child {
+            DraftChild::Node(child_idx) => Some((*child_idx, at + 1)),
+            DraftChild::Text(_) => None,
+        }));
+    }
+    true
 }
 
 fn begin_doc_refs(mode: &mut AriaMode<'_>, doc: &TreeDoc, is_full_doc: bool) -> Option<DocSeq> {
@@ -1286,7 +1348,7 @@ fn visit_iframe_node(
 
     let mut draft = DraftNode::new("iframe", String::new(), flags);
     draft.r#ref = assigned_ref;
-    draft.active = (is_ai && render_active && node.state().active()).then_some(true);
+    draft.active = (is_ai && render_active && node.state().active_element()).then_some(true);
     draft.aria_hidden = (is_ai && node.hidden().has_own_aria_hidden()).then_some(true);
     draft.source_node = Some(node.id());
     draft.iframe = resolve_draft_iframe(ctx.tree, node, raw);
@@ -1436,7 +1498,7 @@ fn build_element_draft(
 
     let mut draft = DraftNode::new(role_str, raw_name, flags);
     ctx.state_form.write(state, &mut draft);
-    draft.active = (is_ai && render_active && state.active()).then_some(true);
+    draft.active = (is_ai && render_active && state.active_element()).then_some(true);
     draft.aria_hidden = (is_ai && node.hidden().has_own_aria_hidden()).then_some(true);
     draft.r#ref = assigned_ref;
     draft.url = url;
@@ -1841,11 +1903,15 @@ fn inline_text_into_generic(nodes: &mut [DraftNode], idx: usize) {
     };
 
     let inlined_text = nodes.get(sole_child_idx).and_then(|child| {
+        // A click target keeps its own line, as the old marking's leaf rule had it: inlined into
+        // its parent, its ref and pointer mark would go, and the v1 text would print its text
+        // with nothing to click. Upstream's plugin has no such case, since it reads no cursor.
         if child.role != "generic"
             || !child.name.is_empty()
             || child.active == Some(true)
             || child.has_props()
             || child.flags.is_inert() != node_is_inert
+            || (child.r#ref.is_some() && child.flags.pointer_cursor())
         {
             return None;
         }
@@ -1885,6 +1951,9 @@ fn should_remove_name_repeating_child(
     text == Some(parent_name)
 }
 
+/// Upstream's `unwrapSingleChildGenerics` (ariaSnapshotDistiller.ts at v1.64.1). Unlike the
+/// two rules above it does not spare an active generic: a focused document's body that holds a
+/// single control unwraps, and its `[active]` goes with it, as upstream prints.
 fn should_unwrap_single_child_generic(
     nodes: &[DraftNode],
     node: &DraftNode,
@@ -1892,7 +1961,6 @@ fn should_unwrap_single_child_generic(
 ) -> bool {
     if node.role != "generic"
         || !node.name.is_empty()
-        || node.active == Some(true)
         || node.has_props()
         || node.children.len() > 1
     {
@@ -2536,6 +2604,22 @@ mod tests {
         None
     }
 
+    fn all_by_role<'a>(nodes: &'a [AriaNode], role: &str) -> Vec<&'a AriaNode> {
+        let mut found = Vec::new();
+        let mut stack: Vec<&'a AriaNode> = nodes.iter().rev().collect();
+        while let Some(node) = stack.pop() {
+            if node.role == role {
+                found.push(node);
+            }
+            for child in node.children.iter().rev() {
+                if let AriaChild::Node(child_node) = child {
+                    stack.push(child_node);
+                }
+            }
+        }
+        found
+    }
+
     fn find_by_role_text<'a>(
         nodes: &'a [AriaNode],
         role: &str,
@@ -2662,6 +2746,57 @@ mod tests {
         Ok(SnapshotTree::build(apc, BuildOptions::new())?)
     }
 
+    /// A `<body>` holding `buttons` buttons, in the document that holds the page's focus with
+    /// nothing focused in it, so the body is its active element.
+    fn focused_body(buttons: i32) -> Result<SnapshotTree, Box<dyn Error>> {
+        let mut body = NodeBuilder::element("body")
+            .dom_id(3)
+            .bounding_box(0, 0, 400, 200);
+        for n in 0..buttons {
+            body = body.child(
+                NodeBuilder::form_control(FormControlType::ButtonButton)
+                    .dom_id(10 + n)
+                    .tag("button")
+                    .bounding_box(0, 30 * n, 80, 24)
+                    .child(NodeBuilder::text("Go")),
+            );
+        }
+        let apc = ApcBuilder::new("doc-focus")
+            .focused_frame("doc-focus")
+            .root(NodeBuilder::root().child(NodeBuilder::element("html").child(body)))
+            .build();
+        Ok(SnapshotTree::build(apc, BuildOptions::new())?)
+    }
+
+    #[test]
+    fn tests_that_an_active_body_holding_one_control_unwraps_as_upstream()
+    -> Result<(), Box<dyn Error>> {
+        let tree = focused_body(1)?;
+        let mut refs = TabRefTable::new();
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+        let [button] = ai.nodes() else {
+            return Err("the button alone at the top".into());
+        };
+        assert_eq!(button.role, "button", "the body's generic unwraps");
+        assert_eq!(button.active, None, "and its [active] goes with it");
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_an_active_body_holding_two_controls_prints_active() -> Result<(), Box<dyn Error>>
+    {
+        let tree = focused_body(2)?;
+        let mut refs = TabRefTable::new();
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+        let [body] = ai.nodes() else {
+            return Err("the body's generic alone at the top".into());
+        };
+        assert_eq!(body.role, "generic");
+        assert_eq!(body.active, Some(true));
+        assert_eq!(body.children.len(), 2);
+        Ok(())
+    }
+
     #[test]
     fn ai_mode_emits_states_refs_cursor_and_synthesized_options() -> Result<(), Box<dyn Error>> {
         let tree = build_rich_tree()?;
@@ -2731,6 +2866,103 @@ mod tests {
             .ok_or("missing toggle without active")?;
         assert_eq!(toggle_no_active.active, None);
         assert_eq!(toggle_no_active.r#ref, toggle.r#ref);
+        Ok(())
+    }
+
+    /// Upstream's default `aria` visibility stops at an element hidden for aria, so a
+    /// `visibility: visible` child of a `visibility: hidden` parent never prints; ai mode shows it.
+    /// The cut needs the capture to carry the hidden parent, which v7 keeps for some markup only.
+    /// A custom element's shadow card: the host prints as a generic holding one `tabindex` card,
+    /// a click target whose only content is text, which stays on its own line with its ref.
+    #[test]
+    fn tests_that_a_click_target_is_not_inlined_into_its_parent_generic()
+    -> Result<(), Box<dyn Error>> {
+        let body = NodeBuilder::element("body")
+            .dom_id(3)
+            .bounding_box(0, 0, 400, 200)
+            .child(
+                NodeBuilder::element("text-card")
+                    .dom_id(10)
+                    .bounding_box(0, 0, 400, 20)
+                    .child(
+                        NodeBuilder::container()
+                            .dom_id(11)
+                            .clickability_reason(ClickabilityReason::TabIndex)
+                            .focusable(true)
+                            .tabbable(true)
+                            .bounding_box(0, 0, 400, 20)
+                            .child(NodeBuilder::text("Card text")),
+                    ),
+            )
+            .child(
+                NodeBuilder::form_control(FormControlType::ButtonButton)
+                    .dom_id(20)
+                    .tag("button")
+                    .bounding_box(0, 40, 80, 24)
+                    .child(NodeBuilder::text("Other")),
+            );
+        let apc = ApcBuilder::new("doc-card")
+            .root(NodeBuilder::root().child(NodeBuilder::element("html").child(body)))
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        let mut refs = TabRefTable::new();
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+        let card = all_nodes(ai.nodes())
+            .into_iter()
+            .find(|node| node.cursor.is_some() && node.text.as_deref() == Some("Card text"))
+            .ok_or("the card keeps its own pointer line")?;
+        assert!(card.r#ref.is_some(), "and its ref");
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_default_mode_skips_the_visible_children_of_a_hidden_parent()
+    -> Result<(), Box<dyn Error>> {
+        let body = NodeBuilder::element("body")
+            .dom_id(3)
+            .bounding_box(0, 0, 400, 200)
+            .child(
+                NodeBuilder::container()
+                    .dom_id(5)
+                    .visibility_hidden(true)
+                    .bounding_box(0, 0, 400, 100)
+                    .child(
+                        NodeBuilder::container()
+                            .dom_id(6)
+                            .bounding_box(0, 0, 400, 100)
+                            .child(
+                                NodeBuilder::form_control(FormControlType::ButtonButton)
+                                    .dom_id(7)
+                                    .tag("button")
+                                    .bounding_box(0, 0, 80, 24)
+                                    .child(NodeBuilder::text("Button")),
+                            ),
+                    ),
+            );
+        let apc = ApcBuilder::new("doc-hidden")
+            .root(NodeBuilder::root().child(NodeBuilder::element("html").child(body)))
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        let body_id = tree
+            .node_by_key(&NodeKey::new(
+                DocToken::new("doc-hidden").ok_or("a token")?,
+                DomNodeId::new(3),
+            ))
+            .map(TreeNode::id)
+            .ok_or("the body")?;
+        for root in [AriaRoot::Page, AriaRoot::Subtree(body_id)] {
+            let default = tree.aria(AriaAsk::default_mode().with_root(root))?;
+            assert!(
+                find_by_role_name(default.nodes(), "button", Some("Button")).is_none(),
+                "default mode stops at the hidden parent, as upstream's 'aria' visibility does"
+            );
+        }
+        let mut refs = TabRefTable::new();
+        let ai = tree.aria(AriaAsk::ai(&mut refs))?;
+        assert!(
+            find_by_role_name(ai.nodes(), "button", Some("Button")).is_some(),
+            "ai mode shows it"
+        );
         Ok(())
     }
 
@@ -3490,11 +3722,17 @@ mod tests {
         assert_eq!(partial.reason, "timeout after 2000 ms");
         assert!(!partial.r#ref.is_empty());
 
+        // Default mode reads one document, as upstream's does: each iframe is a leaf, and a
+        // frame it never reads cannot be partial.
         let default = tree.aria(AriaAsk::default_mode())?;
-        let default_child_btn = find_by_role_name(default.nodes(), "button", Some("Child Go"))
-            .ok_or("child iframe button must stitch in default mode without refs")?;
-        assert_eq!(default_child_btn.r#ref, None);
-        assert_eq!(default.partial().len(), 1);
+        assert!(
+            find_by_role_name(default.nodes(), "button", Some("Child Go")).is_none(),
+            "a child frame's button is not read in default mode"
+        );
+        let iframes = all_by_role(default.nodes(), "iframe");
+        assert!(!iframes.is_empty(), "the iframes still print");
+        assert!(iframes.iter().all(|iframe| iframe.children.is_empty()));
+        assert!(default.partial().is_empty());
 
         let zero = tree.aria(AriaAsk::default_mode().with_depth(Some(0)))?;
         assert_eq!(
@@ -3541,6 +3779,33 @@ mod tests {
         assert_eq!(refusal.frame, "https://deep.example/inner");
         let expected_reason = depth_error((163 + 162 - 1) / 2);
         assert_eq!(refusal.reason, expected_reason);
+        Ok(())
+    }
+
+    /// A document that ends in bare leaves one level past `MAX_TREE_DEPTH` is no deeper than one
+    /// the page's engine returned (`neo_snapshot::MAX_TREE_DEPTH`): it is emitted whole, leaves
+    /// included, in both modes; one level more is refused.
+    #[test]
+    fn a_document_ending_in_bare_leaves_one_level_past_the_cap_is_emitted_whole()
+    -> Result<(), Box<dyn Error>> {
+        let chain = |groups| {
+            ApcBuilder::new("doc-deep")
+                .root(
+                    NodeBuilder::root()
+                        .child(build_nested_group_chain(groups, deep_button("Deep target"))),
+                )
+                .build()
+        };
+        let fits = SnapshotTree::build(chain(MAX_TREE_DEPTH), BuildOptions::new())?;
+        let mut refs = TabRefTable::new();
+        let ai = fits.aria(AriaAsk::ai(&mut refs))?;
+        assert!(find_by_role_name(ai.nodes(), "button", Some("Deep target")).is_some());
+        assert!(neo_snapshot::json_depth(ai.nodes()) < MAX_JSON_DEPTH);
+        let default = fits.aria(AriaAsk::default_mode())?;
+        assert!(find_by_role_name(default.nodes(), "button", Some("Deep target")).is_some());
+
+        let deeper = SnapshotTree::build(chain(MAX_TREE_DEPTH + 1), BuildOptions::new())?;
+        assert!(deeper.aria(AriaAsk::default_mode()).is_err());
         Ok(())
     }
 

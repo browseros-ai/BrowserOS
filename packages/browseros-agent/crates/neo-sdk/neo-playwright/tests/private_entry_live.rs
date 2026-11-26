@@ -1237,7 +1237,8 @@ async fn tests_that_a_ref_from_before_a_restart_says_no_frame_gone() -> TestResu
 
 /// Ruling R63, row 6: a frame-tree read that fails, refused or never answered, gives no
 /// `frame_gone` for a ref whose frame is in fact gone; the same ref answers it once the read goes
-/// through. A read that is not whole cannot come back: the read requires every cross-site frame's
+/// through. A refused read answers `element_detached`; one that never answers times the look out,
+/// since the ref's world is installed through that tree. A read that is not whole cannot come back: the read requires every cross-site frame's
 /// tree and fails without one (`frame_tree::read_steady`). Fails with a failed read taken as
 /// "the frame is not there".
 #[tokio::test]
@@ -1254,19 +1255,32 @@ async fn tests_that_a_failed_frame_tree_read_says_no_frame_gone() -> TestResult 
         ("Target.getTargets", Failing::Hang),
     ] {
         bench.recording.fail(method, how);
-        let look = look_one(
-            &bench,
-            &opened,
-            &plain_look(&opened, &near, Duration::from_secs(2)),
-        )
-        .await;
+        let env = bench.host(&opened);
+        let checked = bench
+            .live
+            .playwright
+            .look_boxes(&env, &plain_look(&opened, &near, Duration::from_secs(2)))
+            .await;
         bench.recording.stop_failing();
-        let look = look?;
-        let code = look.refusal.as_ref().map(|error| error.code.clone());
+        // A ref whose document no world has proven reaches its frame through the frame tree, so
+        // a tree that never answers ends the whole check at its deadline instead, claiming no
+        // frame gone either way.
+        let (code, frame_gone) = match &checked {
+            Ok(looks) => {
+                let look = looks.first().ok_or("an answer for the box")?;
+                let code = look.refusal.as_ref().map(|error| error.code.clone());
+                (code, look.frame_gone)
+            }
+            Err(error) => (Some(error.code.clone()), false),
+        };
+        let refused = match how {
+            Failing::Refuse => DETACHED,
+            Failing::Hang => "run_timeout",
+        };
         assert_eq!(
-            (code, look.frame_gone),
-            (Some(DETACHED.to_owned()), false),
-            "{method} {how:?}: {look:?}"
+            (code, frame_gone),
+            (Some(refused.to_owned()), false),
+            "{method} {how:?}: {checked:?}"
         );
     }
     assert_eq!(
@@ -3482,6 +3496,42 @@ fn expectation(target: (&str, Value), matcher: &str, params: &Value) -> Value {
     input
 }
 
+/// Privacy layer 2 across instances (apc-engine-design 8.1, "Keeping the copy complete"): a box
+/// the host typed a value into under one `Playwright` keeps its mark only in the page's isolated
+/// world, which outlives the instance; a later instance's mirror of the tab's private nodes has
+/// never seen it. That instance's first snapshot of the tab, which was open when it started, reads
+/// the document's marks from its world before the tree prints, so the box prints bullets, never
+/// the value, on its very first read.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_a_later_instances_first_snapshot_prints_a_box_typed_before_it_as_bullets()
+-> TestResult {
+    let bench = Bench::start().await?;
+    let bullets = "•".repeat(MARKED.chars().count());
+    let opened = bench
+        .open("/private/covered-login.html?mode=none", Place::Front)
+        .await?;
+    let email = bench.r#ref(&opened, "textbox", "Email").await?;
+    let env = bench.host(&opened);
+    let fields = vec![Field::new(&email, &bench.page_origin).with(MARKED)?];
+    let entry = bench.enter(&env, &opened, fields).await;
+    assert_eq!(entry.outcome, EntryOutcome::Entered, "{entry:?}");
+
+    // A second instance on the same browser, as a restarted claw-sdk is: the tab is one it found
+    // open, and nothing it holds says which box was typed.
+    let later = LiveBrowser::connect().await?;
+    let page = opened.page.brand();
+    let printed = later
+        .invoke("page.ariaSnapshot", page_snapshot(&page, false))
+        .await??
+        .to_string();
+    assert!(
+        !printed.contains(MARKED) && printed.contains(&bullets),
+        "the later instance's first snapshot prints the box as bullets: {printed}"
+    );
+    bench.close(opened).await
+}
+
 /// Protected fill 4/5 (design decision 6, rulings R14, R44 and R47): every read Neo itself makes
 /// of a box the entry typed a host's value into answers one bullet per character, on a tab in
 /// front and behind. The box is the Email box, which the page does not declare private, so the
@@ -4022,6 +4072,8 @@ async fn tests_that_a_box_marked_in_a_removed_frame_stays_masked() -> TestResult
 /// A receiving tab searches for a foreign prototype only after its own private fill. The
 /// source probe is warmed before adoption, and its frame is removed before either snapshot.
 /// The declared Code box is never filled by Neo; a separate Plain box supplies the history.
+/// Snapshots read the browser's tree, and the patched browser redacts a one-time-code value
+/// itself (contract version 1), wherever the box moved: both tabs print it as bullets.
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_only_a_filled_receiving_tab_discovers_a_moved_declared_box() -> TestResult {
@@ -4053,18 +4105,11 @@ async fn tests_that_only_a_filled_receiving_tab_discovers_a_moved_declared_box()
         let closed = bench.close(opened).await;
         let printed = result?;
         closed?;
-        let value = if filled {
-            "•".repeat(MARKED.len())
-        } else {
-            MARKED.to_owned()
-        };
+        let bullets = "•".repeat(MARKED.len());
         assert!(
-            printed.contains(&format!("Send {value}")),
+            printed.contains(&format!("Send {bullets}")) && !printed.contains(MARKED),
             "filled={filled}: {printed}"
         );
-        if filled {
-            assert!(!printed.contains(MARKED), "filled={filled}: {printed}");
-        }
     }
     Ok(())
 }

@@ -474,8 +474,14 @@ impl<'a, 't> Printer<'a, 't> {
         let value = if let Some(own) = node.text.as_deref()
             && Some(own) != name
         {
-            // A text that differs from the name: how a text box shows its value.
-            Some(own.to_owned())
+            if text || node.role != "generic" || named(name).is_some() {
+                // A text that differs from the name: how a text box shows its value.
+                Some(own.to_owned())
+            } else {
+                // A clickable generic's one string is the text its children held, inlined by the
+                // ai distillation (`inlineTextIntoGeneric`), so it is clipped as the walk's is.
+                Some(clip(own, OWN_TEXT_CLIP))
+            }
         } else if FIELD.contains(&node.role.as_str()) && node.text.is_none() {
             // A dropdown's or an editor's value can be its children instead of a `text`. It is
             // kept on the field's line before the children's walk leaves out repeated text.

@@ -279,6 +279,30 @@ pub(crate) enum Poll {
     Missing,
 }
 
+/// What a single-element poll that failed its matcher attaches as its aria snapshot: for an
+/// element snapshot, the frame's body instead when the frame or the element is hidden.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FailedPollSnapshot {
+    /// A count, an array form or a template: no snapshot.
+    Nothing,
+    /// The element's own line.
+    OwnLine,
+    /// The element whole: the containment matcher `to.have.text`.
+    Whole,
+    /// The body: a page's title or URL, which no element shows.
+    Body,
+}
+
+/// What a failed matcher's aria snapshot is read for, once its op fails ([`Expectation::run`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FailedOn {
+    /// The last poll found nothing: the body of the frame the matcher started in.
+    Nothing,
+    /// The last poll ran the matcher and it failed: what
+    /// [`Expectation::failed_poll_snapshot`] attaches.
+    Element,
+}
+
 /// One retrying matcher, decoded and checked before anything is sent. It holds the
 /// script's Expected line, which may name a secret, so it has no `Debug`.
 pub(crate) struct Expectation {
@@ -356,6 +380,45 @@ impl Expectation {
         }
     }
 
+    /// The matcher's params, as the probe would receive them: what `aria_expect` reads its
+    /// matcher from.
+    pub(crate) fn params(&self) -> &ExpectParams {
+        &self.args.params
+    }
+
+    /// The matcher's received value as the probe's `expect` reply carries it, for a poll Rust
+    /// answered itself (`aria_expect`).
+    pub(crate) fn printed(&self, received: Value) -> Value {
+        self.expression.printed_received(received)
+    }
+
+    /// A matcher that cannot run on the element it found, printed as its `Error:` line, as an
+    /// error the page's engine throws is.
+    pub(crate) fn refused_matcher(&self, scope: &OpScope<'_>, error: &str) -> PlaywrightError {
+        self.thrown(scope, ErrorCode::InvalidInput, error)
+    }
+
+    /// Whether the matcher is negated (`.not`): what a poll's result must differ from to pass.
+    pub(crate) const fn is_not(&self) -> bool {
+        self.is_not
+    }
+
+    /// What a single-element poll that failed this matcher snapshots, as upstream's page decides
+    /// it (`_ariaSnapshotForExpect`, `injectedScript.ts:1507-1520`).
+    pub(crate) const fn failed_poll_snapshot(&self) -> FailedPollSnapshot {
+        match self.expression {
+            Expression::Count
+            | Expression::TextArray
+            | Expression::ContainTextArray
+            | Expression::ClassArray
+            | Expression::ContainClassArray
+            | Expression::MatchAria => FailedPollSnapshot::Nothing,
+            Expression::Text => FailedPollSnapshot::Whole,
+            Expression::Title | Expression::Url => FailedPollSnapshot::Body,
+            _ => FailedPollSnapshot::OwnLine,
+        }
+    }
+
     /// The probe request for one poll on `target`.
     pub(crate) fn request(&self, target: ProbeTarget, frame_visible: bool) -> ProbeRequest {
         ProbeRequest::Expect {
@@ -371,23 +434,25 @@ impl Expectation {
     /// once (a strict violation, an error the engine threw, a stale ref, a gone page), or
     /// before the first poll for a template that did not parse.
     /// `checkpoint` is the page's locator-handler checkpoint, which upstream's `expect` runs
-    /// under the timeout before the one-shot and before every later poll. `root_snapshot` reads
-    /// the body's aria snapshot of the frame the matcher started in, for a failure that found
-    /// nothing, as upstream's `Frame._expectInternal` does.
+    /// under the timeout before the one-shot and before every later poll. `failure_snapshot`
+    /// reads the aria snapshot the failure reports, once, when the op fails: the body of the
+    /// frame the matcher started in for a last poll that found nothing, as upstream's
+    /// `Frame._expectInternal` does, or what the matcher's failed poll attaches
+    /// ([`Expectation::failed_poll_snapshot`]) when that poll carries none of its own.
     /// Success is `Nothing`; the route owns encoding that acknowledgment as JSON null.
     pub(crate) async fn run<C, CFut, F, Fut, R, RFut>(
         &self,
         scope: &OpScope<'_>,
         mut checkpoint: C,
         mut poll: F,
-        root_snapshot: R,
+        failure_snapshot: R,
     ) -> Result<Nothing, PlaywrightError>
     where
         C: FnMut() -> CFut,
         CFut: Future<Output = Result<(), PlaywrightError>>,
         F: FnMut() -> Fut,
         Fut: Future<Output = Result<Poll, PlaywrightError>>,
-        R: FnOnce() -> RFut,
+        R: FnOnce(FailedOn) -> RFut,
         RFut: Future<Output = Option<String>>,
     {
         let receiver = self.receiver();
@@ -445,16 +510,35 @@ impl Expectation {
             }
             last = Some(polled);
         }
-        // Upstream snapshots the body on each poll that finds nothing; Neo reads it once, for
-        // the failure that reports it.
-        let snapshot = match last.as_ref() {
-            Some(Poll::Missing) => time::timeout(ROOT_SNAPSHOT_BUDGET, root_snapshot())
+        // Upstream snapshots on each poll that fails; Neo reads one snapshot, for the failure
+        // that reports it, so a poll that a later one overturns costs no capture.
+        let wanted = match last.as_ref() {
+            Some(Poll::Missing) => Some(FailedOn::Nothing),
+            Some(Poll::Ran {
+                aria_snapshot: None,
+                ..
+            }) if self.failed_poll_snapshot() != FailedPollSnapshot::Nothing => {
+                Some(FailedOn::Element)
+            }
+            Some(Poll::Ran { .. }) | None => None,
+        };
+        let snapshot = match wanted {
+            Some(on) => time::timeout(ROOT_SNAPSHOT_BUDGET, failure_snapshot(on))
                 .await
                 .ok()
                 .flatten(),
-            Some(Poll::Ran { .. }) | None => None,
+            None => None,
         };
-        Err(self.timed_out(scope, last.as_ref(), snapshot.as_deref()))
+        let root_snapshot = match last.as_mut() {
+            Some(Poll::Ran { aria_snapshot, .. }) => {
+                if aria_snapshot.is_none() {
+                    *aria_snapshot = snapshot;
+                }
+                None
+            }
+            Some(Poll::Missing) | None => snapshot,
+        };
+        Err(self.timed_out(scope, last.as_ref(), root_snapshot.as_deref()))
     }
 
     /// One probe reply as a poll, or the failure it ends the op with.
@@ -480,7 +564,7 @@ impl Expectation {
             ProbeReply::None { stale_ref: None } | ProbeReply::Detached => Ok(self.nothing_found()),
             // Upstream throws these from the page, so they end the matcher at once and print
             // as its `Error:` line.
-            ProbeReply::Strict { message } => {
+            ProbeReply::Strict { message, .. } => {
                 Err(self.thrown(scope, ErrorCode::StrictModeViolation, &message))
             }
             ProbeReply::Error {
@@ -653,12 +737,13 @@ impl MatcherFacts<'_> {
 mod tests {
     use std::error::Error;
     use std::future;
+    use std::sync::{Mutex, PoisonError};
     use std::time::Duration;
 
     use serde_json::{Map, Value, json};
     use tokio::time::{self, Instant};
 
-    use super::{Expectation, Expression, MatcherArgs, ONE_SHOT_FLOOR, Poll, Subject};
+    use super::{Expectation, Expression, FailedOn, MatcherArgs, ONE_SHOT_FLOOR, Poll, Subject};
     use crate::op::Op;
     use crate::op_scope::OpScope;
     use crate::probe::{ExpectParams, ProbeReply};
@@ -786,7 +871,7 @@ mod tests {
     }
 
     /// A frame with no body to snapshot.
-    fn no_snapshot() -> future::Ready<Option<String>> {
+    fn no_snapshot(_: FailedOn) -> future::Ready<Option<String>> {
         future::ready(None)
     }
 
@@ -1002,7 +1087,7 @@ mod tests {
                         aria_snapshot: Some("- text: Hi".to_owned()),
                     })
                 },
-                || future::ready(Some("- heading \"Page\" [level=1]".to_owned())),
+                |_| future::ready(Some("- heading \"Page\" [level=1]".to_owned())),
             )
             .await
             .err()
@@ -1025,7 +1110,7 @@ mod tests {
                 &scope,
                 no_handlers,
                 || async { Ok(Poll::Missing) },
-                || future::ready(Some("- heading \"Page\" [level=1]".to_owned())),
+                |_| future::ready(Some("- heading \"Page\" [level=1]".to_owned())),
             )
             .await
             .err()
@@ -1075,6 +1160,49 @@ mod tests {
             facts["ariaSnapshot"],
             json!(""),
             "a poll's empty snapshot stays"
+        );
+        Ok(())
+    }
+
+    /// A failed poll with no snapshot of its own gets the element's, read once, at the failure.
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_failed_poll_without_a_snapshot_reads_the_elements_once()
+    -> Result<(), Box<dyn Error>> {
+        let env = TestEnv::new();
+        let scope = scope_with_timeout(&env, 300)?;
+        let expect = visible(&scope)?;
+        let asked = Mutex::new(Vec::new());
+        let deferred = expect
+            .run(
+                &scope,
+                no_handlers,
+                || async {
+                    Ok(Poll::Ran {
+                        matches: false,
+                        resolved: "<div id=\"x\">Hi</div>".to_owned(),
+                        received: Some(json!("hidden")),
+                        aria_snapshot: None,
+                    })
+                },
+                |on| {
+                    asked
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .push(on);
+                    future::ready(Some("- generic: Hi".to_owned()))
+                },
+            )
+            .await
+            .err()
+            .ok_or("a hidden element fails toBeVisible")?;
+        let facts = deferred
+            .matcher_details()
+            .ok_or("the failure carries facts")?;
+        assert_eq!(facts["ariaSnapshot"], json!("- generic: Hi"));
+        assert_eq!(
+            *asked.lock().unwrap_or_else(PoisonError::into_inner),
+            [FailedOn::Element],
+            "one read, for the element"
         );
         Ok(())
     }

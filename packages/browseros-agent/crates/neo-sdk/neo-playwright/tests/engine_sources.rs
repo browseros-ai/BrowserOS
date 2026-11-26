@@ -193,11 +193,6 @@ const INTERNALS_ALLOWED: &[(&str, &str, &str)] = &[
     ),
     (
         "crates/neo-sdk/neo-playwright-js/tests/failure-output.test.ts",
-        "_ariaSnapshotForExpect",
-        "reads the native failure-tree baseline to verify conformance byte equality; production still reaches it only through the probe",
-    ),
-    (
-        "crates/neo-sdk/neo-playwright-js/tests/failure-output.test.ts",
         "_generateSelectors",
         "observes the exact native diagnostic descriptor before and after scoped hooks; the exception is this test file and member only",
     ),
@@ -334,7 +329,8 @@ fn quoted_list<'a>(text: &'a str, open: &str, close: &str) -> Vec<&'a str> {
 }
 
 /// The snapshot's name rule acts on exactly the roles whose names Playwright's own accessible
-/// name code refuses (roleUtils' `elementProhibitsNaming`, ARIA's "name from: prohibited").
+/// name code refuses (roleUtils' `elementProhibitsNaming`, ARIA's "name from: prohibited"). The
+/// rule is the APC engine's emitter's, which prints every snapshot.
 #[test]
 fn tests_that_the_name_rule_uses_playwrights_list_of_name_prohibited_roles() -> TestResult {
     let role_utils = fs::read_to_string(
@@ -343,12 +339,8 @@ fn tests_that_the_name_rule_uses_playwrights_list_of_name_prohibited_roles() -> 
             .join("packages/injected/src/roleUtils.ts"),
     )?;
     let upstream = quoted_list(&role_utils, "const elementProhibitsNaming = [", "]");
-    let rules = fs::read_to_string(crate_root().join("src/snapshot/snapshot_rules.rs"))?;
-    let ours = quoted_list(
-        &rules,
-        "pub(crate) const NAME_PROHIBITED_ROLES: &[&str] = &[",
-        "];",
-    );
+    let rules = fs::read_to_string(crate_root().join("../neo-snapshot-apc/src/tree/aria_emit.rs"))?;
+    let ours = quoted_list(&rules, "const NAME_PROHIBITED_ROLES: &[&str] = &[", "];");
     assert!(!upstream.is_empty(), "roleUtils.ts still lists the roles");
     assert_eq!(ours, upstream, "NAME_PROHIBITED_ROLES is roleUtils' list");
     Ok(())

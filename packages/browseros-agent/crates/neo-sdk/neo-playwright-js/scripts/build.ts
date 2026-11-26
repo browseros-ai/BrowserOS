@@ -58,36 +58,71 @@ const STUBS: Record<string, string> = {
 }
 
 /**
- * The stand-ins, and upstream's `@isomorphic/*` alias (its tsconfig) pointed at the vendored
- * copy. This package's own sources import vendored modules by relative path.
+ * The page's ARIA engine leaves the bundle (apc-engine-design 9.3; the owner's Q3): Rust's APC
+ * tree answers roles, names, aria snapshots, role selectors and refs, so the three vendored files
+ * InjectedScript reads them from are swapped for stand-ins, as `highlight` and `consoleApi` are.
+ * The stand-in `roleUtils` keeps what an action checks on the live element (`enabled`,
+ * `editable`, `checked`) and the label lookup `getByLabel` uses; the other two throw, so a page
+ * path that still asks the old engine fails loudly. Only a vendored `injected/src` file's import
+ * is swapped: `isomorphic/ariaSnapshot.ts` is the template parser, which stays.
  */
-const vendored: BunPlugin = {
-  name: 'vendored-playwright',
-  setup(build) {
-    // The yaml release Playwright bundles, which the prelude parses aria templates with
-    // (src/prelude/aria-template.ts). Sources import it by package name, typed from npm's
-    // declarations; the bundle takes the vendored bytes (third_party/yaml/README.md).
-    build.onResolve({ filter: /^yaml$/ }, () => ({ path: yamlEntry }))
-    // yaml's logger names `console`, which the prelude's realm lacks (src/stubs/yaml-log.ts).
-    build.onResolve({ filter: /^\.\.?\/log\.js$/ }, (args) =>
-      args.importer.startsWith(`${yamlRoot}${sep}`)
-        ? { path: resolve(packageRoot, 'src/stubs/yaml-log.ts') }
-        : undefined,
-    )
-    build.onResolve({ filter: /^\.\/(highlight|consoleApi)$/ }, (args) => {
-      const stub = STUBS[args.path]
-      if (!stub) throw new Error(`No stub for ${args.path}`)
-      return { path: stub }
-    })
-    build.onResolve({ filter: /^@isomorphic\// }, (args) => ({
-      path: resolve(
-        vendorRoot,
-        'packages/isomorphic',
-        `${args.path.slice('@isomorphic/'.length)}.ts`,
-      ),
-    }))
-  },
+const injectedRoot = resolve(vendorRoot, 'packages/injected/src')
+const ENGINE_STUBS: Record<string, string> = {
+  './roleUtils': resolve(packageRoot, 'src/stubs/roleUtils.ts'),
+  './ariaSnapshot': resolve(packageRoot, 'src/stubs/ariaSnapshot.ts'),
+  './roleSelectorEngine': resolve(
+    packageRoot,
+    'src/stubs/roleSelectorEngine.ts',
+  ),
 }
+
+/**
+ * The stand-ins, and upstream's `@isomorphic/*` alias (its tsconfig) pointed at the vendored
+ * copy. This package's own sources import vendored modules by relative path. `engine` keeps the
+ * vendored ARIA engine in: only for the test oracle (`oracleProbe`), never for an asset.
+ */
+function vendoredPlugin(engine: 'stand-ins' | 'vendored'): BunPlugin {
+  return {
+    name: 'vendored-playwright',
+    setup(build) {
+      // The yaml release Playwright bundles, which the prelude parses aria templates with
+      // (src/prelude/aria-template.ts). Sources import it by package name, typed from npm's
+      // declarations; the bundle takes the vendored bytes (third_party/yaml/README.md).
+      build.onResolve({ filter: /^yaml$/ }, () => ({ path: yamlEntry }))
+      // yaml's logger names `console`, which the prelude's realm lacks (src/stubs/yaml-log.ts).
+      build.onResolve({ filter: /^\.\.?\/log\.js$/ }, (args) =>
+        args.importer.startsWith(`${yamlRoot}${sep}`)
+          ? { path: resolve(packageRoot, 'src/stubs/yaml-log.ts') }
+          : undefined,
+      )
+      build.onResolve({ filter: /^\.\/(highlight|consoleApi)$/ }, (args) => {
+        const stub = STUBS[args.path]
+        if (!stub) throw new Error(`No stub for ${args.path}`)
+        return { path: stub }
+      })
+      build.onResolve(
+        { filter: /^\.\/(roleUtils|ariaSnapshot|roleSelectorEngine)$/ },
+        (args) => {
+          if (engine === 'vendored') return undefined
+          if (!args.importer.startsWith(`${injectedRoot}${sep}`))
+            return undefined
+          const stub = ENGINE_STUBS[args.path]
+          if (!stub) throw new Error(`No stand-in for ${args.path}`)
+          return { path: stub }
+        },
+      )
+      build.onResolve({ filter: /^@isomorphic\// }, (args) => ({
+        path: resolve(
+          vendorRoot,
+          'packages/isomorphic',
+          `${args.path.slice('@isomorphic/'.length)}.ts`,
+        ),
+      }))
+    },
+  }
+}
+
+const vendored = vendoredPlugin('stand-ins')
 
 /** Playwright's value serializers, which the prelude runs in QuickJS (src/prelude/evaluation.ts). */
 const VALUE_SERIALIZERS = new Set([
@@ -203,6 +238,24 @@ async function quickjsGlobal(entry: string, name: string): Promise<string> {
   return `(function () {\n'use strict';\n${body}\nglobalThis.${name} = ${name};\n})();\n`
 }
 
+/**
+ * The probe built with Playwright's own ARIA engine instead of the stand-ins, as the page bundle
+ * was before the switch-over: the oracle the probe's Bun tests compare the stand-in bundle
+ * against (a stage's page form against the vendored role engine), and the engine the requests
+ * Rust no longer sends (`snapshot`) still run on until engine chunk 14 deletes them. Never
+ * written to disk.
+ */
+/**
+ * The first line of both probe bundles. DeepScan already scans the sources they are built
+ * from, and in the page asset upstream's InjectedScript calls Neo's stand-ins, which throw by
+ * design, so its flow rules would flag upstream's code after those calls.
+ */
+const DEEPSCAN_OFF = '/* deepscan-disable */\n'
+
+export async function oracleProbe(): Promise<string> {
+  return bundle('src/probe/index.ts', 'iife', [vendoredPlugin('vendored')])
+}
+
 export async function buildOutputs(): Promise<Output[]> {
   // Check the shared entry point so imported builds and CLI builds use the same emitter.
   // A different Bun can change embedded bytes even when all source files are unchanged.
@@ -245,15 +298,33 @@ export async function buildOutputs(): Promise<Output[]> {
  * Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
  */
 ${prelude}`
+  const oracle = await oracleProbe()
   return [
     {
+      // The oracle the APC engine's tests run upstream's role engine from: in QuickJS
+      // (neo-snapshot-apc/tests/select_match_oracle.rs) and, in a world of its own, in the
+      // zero-conflict harness's pages (tests/support/oracle_capture.rs). The probe with the
+      // vendored ARIA engine still bundled, as the page asset was before the switch-over. A
+      // test file only: Neo never ships it.
+      path: 'crates/neo-sdk/neo-snapshot-apc/tests/data/oracle-injected.js',
+      text: `${DEEPSCAN_OFF}/*
+ * Test oracle, not a page asset: Neo's probe with Playwright ${tag} (${commit}) packages/injected
+ * InjectedScript and its own ARIA engine (roleUtils, ariaSnapshot, roleSelectorEngine), built
+ * unmodified by crates/neo-sdk/neo-playwright-js/scripts/build.ts for the APC engine's
+ * differential tests. Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
+ */
+${oracle}`,
+    },
+    {
       path: 'crates/neo-sdk/neo-playwright/assets/injected.js',
-      text: `/*
+      text: `${DEEPSCAN_OFF}/*
  * Neo's probe with Playwright ${tag} (${commit}), packages/injected InjectedScript.
  * Playwright: Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0.
  * Built from crates/neo-sdk/neo-playwright/third_party/playwright, with
  * crates/neo-sdk/neo-playwright-js/src/probe, by crates/neo-sdk/neo-playwright-js/scripts/build.ts.
- * Every upstream module is built unmodified. Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
+ * Every upstream module it holds is built unmodified; roleUtils, ariaSnapshot and
+ * roleSelectorEngine are not among them, Neo's stand-ins (src/stubs) take their place.
+ * Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
  */
 ${injected}`,
     },

@@ -625,8 +625,14 @@ class Printer {
     hidden: Hidden,
   ): void {
     let value: string | undefined
-    // A text field that differs from the name: how a textbox shows its value.
-    if (node.text !== undefined && node.text !== node.name) value = node.text
+    // A text field that differs from the name: how a textbox shows its value. A clickable
+    // generic's one string is the text its children held, inlined by the ai distillation
+    // (`inlineTextIntoGeneric`), so it is clipped as the walk's is.
+    if (node.text !== undefined && node.text !== node.name)
+      value =
+        text || node.role !== 'generic' || node.name
+          ? node.text
+          : clip(node.text, OWN_TEXT_CLIP)
     else if (FIELD.has(node.role) && node.text === undefined) {
       // Dropdown and editor values can be children instead of a `text` field. Keep that
       // value on the field's line before the child walk suppresses repeated text.

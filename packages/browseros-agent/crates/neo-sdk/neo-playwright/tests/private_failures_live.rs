@@ -234,8 +234,10 @@ fn target(selector: &str) -> Value {
     json!({ "chunk": { "parts": [locator::css(selector)] } })
 }
 
-/// Every family has a named native reference. Comparison parameters match the prelude's,
-/// while the actual expected string deliberately has no canary to excuse in a failure.
+/// Every family the page still compares has a named native reference. Comparison parameters
+/// match the prelude's, while the actual expected string deliberately has no canary to excuse in
+/// a failure. The accessibility matchers and templates are the tree's (design 5.6): the page's
+/// engine no longer computes them, so they have no native reference here.
 fn native_cases() -> Vec<(&'static str, &'static str, Value)> {
     let text = json!([{ "string": WRONG, "normalizeWhiteSpace": true }]);
     let value = json!([{ "string": WRONG }]);
@@ -286,21 +288,6 @@ fn native_cases() -> Vec<(&'static str, &'static str, Value)> {
             json!({ "expression": "to.contain.text.array", "expectedText": [{ "string": WRONG, "normalizeWhiteSpace": true, "matchSubstring": true }] }),
         ),
         (
-            "toHaveAccessibleName",
-            "#name-from-private",
-            json!({ "expression": "to.have.accessible.name", "expectedText": text }),
-        ),
-        (
-            "toHaveAccessibleErrorMessage",
-            "#error-from-private",
-            json!({ "expression": "to.have.accessible.error.message", "expectedText": text }),
-        ),
-        (
-            "toHaveAccessibleDescription",
-            "#description-from-private",
-            json!({ "expression": "to.have.accessible.description", "expectedText": text }),
-        ),
-        (
             "toHaveCSS.content.own",
             "#private-input",
             json!({ "expression": "to.have.css", "expressionArg": "content", "expectedText": value }),
@@ -314,16 +301,6 @@ fn native_cases() -> Vec<(&'static str, &'static str, Value)> {
             "toHaveCSS.content.after",
             "#private-input",
             json!({ "expression": "to.have.css", "expressionArg": "content", "pseudo": "after", "expectedText": value }),
-        ),
-        (
-            "toMatchAriaSnapshot.locator",
-            "#private-input",
-            json!({ "expression": "to.match.aria", "expectedValue": { "kind": "role", "role": "button", "name": WRONG } }),
-        ),
-        (
-            "toMatchAriaSnapshot.page",
-            "document",
-            json!({ "expression": "to.match.aria", "expectedValue": { "kind": "role", "role": "button", "name": WRONG } }),
         ),
         (
             "toBeEmpty",
@@ -373,11 +350,6 @@ async fn assert_native_facts(
             Some(actual),
             "{name}: native received bytes"
         );
-        assert_eq!(
-            failure.get("ariaSnapshot").unwrap_or(&Value::Null),
-            native.get("ariaSnapshot").unwrap_or(&Value::Null),
-            "{name}: native failure tree bytes"
-        );
         let resolved = native
             .get("resolved")
             .and_then(Value::as_str)
@@ -393,6 +365,14 @@ async fn assert_native_facts(
         );
     }
     Ok(())
+}
+
+/// `text` with each strict-mode line's ` aka <locator>` left out.
+fn without_akas(text: &str) -> String {
+    text.lines()
+        .map(|line| line.split_once(" aka ").map_or(line, |(head, _)| head))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Strict failures finish on their first resolution, so their full native message and log
@@ -444,12 +424,18 @@ async fn assert_native_strict_failures(
              Locator: locator('{selector}')\nExpected: {expected}\nError: {violation}{call_log}",
             expected = json!(WRONG),
         );
+        // The page's selector generator has no role engine since the switch-over, so its `aka`
+        // lines are no oracle: the tree puts upstream's `getByRole` in where one names the element
+        // alone (apc-engine-design 5.5). Every other byte is the page's.
+        let message = failures
+            .get(name)
+            .and_then(|failure| failure.get("message"))
+            .and_then(Value::as_str)
+            .ok_or("the SDK's strict failure")?;
         assert_eq!(
-            failures
-                .get(name)
-                .and_then(|failure| failure.get("message")),
-            Some(&json!(expected)),
-            "{name}: full upstream failure bytes"
+            without_akas(message),
+            without_akas(&expected),
+            "{name}: full upstream failure bytes, `aka` locators aside"
         );
     }
     Ok(())
@@ -490,20 +476,6 @@ async fn captured_conformance_preserves_native_failure_facts_and_messages() -> T
                 .trim_end_matches('\n')
             ),
             "the existing upstream failure header is byte-for-byte unchanged"
-        );
-        let fallback = probe(
-            &session,
-            context,
-            json!({ "op": "document", "part": "expectSnapshot" }),
-            true,
-        )
-        .await?;
-        assert_eq!(
-            failures
-                .get("missing.fallback")
-                .and_then(|failure| failure.get("ariaSnapshot")),
-            fallback.get("text"),
-            "missing-element fallback keeps native bytes"
         );
         Ok(())
     }

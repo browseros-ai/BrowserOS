@@ -1,9 +1,12 @@
+/* deepscan-disable */
 /*
  * Neo's probe with Playwright v1.64.1 (cfe490d941f992655948eee8fd4fd94e1c4234bf), packages/injected InjectedScript.
  * Playwright: Copyright (c) Microsoft Corporation. Licensed under the Apache License, Version 2.0.
  * Built from crates/neo-sdk/neo-playwright/third_party/playwright, with
  * crates/neo-sdk/neo-playwright-js/src/probe, by crates/neo-sdk/neo-playwright-js/scripts/build.ts.
- * Every upstream module is built unmodified. Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
+ * Every upstream module it holds is built unmodified; roleUtils, ariaSnapshot and
+ * roleSelectorEngine are not among them, Neo's stand-ins (src/stubs) take their place.
+ * Do not edit. Notices: crates/neo-sdk/neo-playwright/THIRD_PARTY_NOTICES.md.
  */
 (() => {
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/cssTokenizer.ts
@@ -1461,46 +1464,680 @@
     return result;
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/cover-aria.ts
-  var providers = new WeakMap;
-  function coverAriaFor(world) {
-    let provider = providers.get(world);
-    if (!provider) {
-      provider = createEngineCoverAria(world);
-      providers.set(world, provider);
-    }
-    return provider;
+  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/domUtils.ts
+  var globalOptions = {};
+  function setGlobalOptions(options) {
+    globalOptions = options;
   }
-  function createEngineCoverAria(world) {
-    return {
-      roleOf: (element) => world.injected.utils.getAriaRole(element),
-      nameOf: (element) => world.injected.utils.getElementAccessibleNameText(element, false),
-      refOf: (element) => world.refs.forElement(element, world.seq),
-      coverSnapshot(element) {
-        const json = quietSnapshot(world.injected, element);
-        return { json, hasWords: holdsWords(json) };
-      }
-    };
-  }
-  function quietSnapshot(injected, element) {
-    const last = Reflect.get(injected, "_lastAriaSnapshotForQuery");
-    try {
-      return injected.ariaSnapshotJSON(element, { mode: "default" }).json;
-    } finally {
-      Reflect.set(injected, "_lastAriaSnapshotForQuery", last);
-    }
-  }
-  function holdsWords(node) {
-    if (typeof node === "string")
-      return node.trim() !== "";
-    if (Array.isArray(node))
-      return node.some(holdsWords);
-    if (typeof node !== "object" || node === null)
-      return false;
-    for (const key of ["name", "text", "children"])
-      if (holdsWords(Reflect.get(node, key)))
+  function isInsideScope(scope, element) {
+    while (element) {
+      if (scope.contains(element))
         return true;
+      element = enclosingShadowHost(element);
+    }
     return false;
+  }
+  function parentElementOrShadowHost(element) {
+    if (element.parentElement)
+      return element.parentElement;
+    if (!element.parentNode)
+      return;
+    if (element.parentNode.nodeType === 11 && element.parentNode.host)
+      return element.parentNode.host;
+  }
+  function enclosingShadowRootOrDocument(element) {
+    let node = element;
+    while (node.parentNode)
+      node = node.parentNode;
+    if (node.nodeType === 11 || node.nodeType === 9)
+      return node;
+  }
+  function enclosingShadowHost(element) {
+    while (element.parentElement)
+      element = element.parentElement;
+    return parentElementOrShadowHost(element);
+  }
+  function closestCrossShadow(element, css, scope) {
+    while (element) {
+      const closest = element.closest(css);
+      if (scope && closest !== scope && closest?.contains(scope))
+        return;
+      if (closest)
+        return closest;
+      element = enclosingShadowHost(element);
+    }
+  }
+  function getElementComputedStyle(element, pseudo) {
+    const cache = pseudo === "::before" ? cacheStyleBefore : pseudo === "::after" ? cacheStyleAfter : cacheStyle;
+    if (cache && cache.has(element))
+      return cache.get(element);
+    const style = element.ownerDocument && element.ownerDocument.defaultView ? element.ownerDocument.defaultView.getComputedStyle(element, pseudo) : undefined;
+    cache?.set(element, style);
+    return style;
+  }
+  function isElementStyleVisibilityVisible(element, style) {
+    const cached = cacheStyleVisibility?.get(element);
+    if (cached !== undefined)
+      return cached;
+    const result = computeElementStyleVisibilityVisible(element, style);
+    cacheStyleVisibility?.set(element, result);
+    return result;
+  }
+  function computeElementStyleVisibilityVisible(element, style) {
+    style = style ?? getElementComputedStyle(element);
+    if (!style)
+      return true;
+    if (!element.checkVisibility() && !isWebKitListBoxOptionVisible(element, style))
+      return false;
+    if (style.visibility !== "visible")
+      return false;
+    return true;
+  }
+  function isListBoxSelect(select) {
+    return select.multiple || select.size > 1;
+  }
+  function isWebKitListBoxOptionVisible(element, style) {
+    if (globalOptions.browserNameForWorkarounds !== "webkit" || element.nodeName !== "OPTION" || style.display === "none")
+      return false;
+    const select = element.closest("select");
+    if (!select || !isListBoxSelect(select))
+      return false;
+    for (let e = element.parentElement;e && e !== select; e = e.parentElement) {
+      if (getElementComputedStyle(e)?.display === "none")
+        return false;
+    }
+    return isElementStyleVisibilityVisible(select);
+  }
+  function computeBox(element) {
+    const style = getElementComputedStyle(element);
+    if (!style)
+      return { visible: true, inline: false };
+    const cursor = style.cursor;
+    if (style.display === "contents") {
+      for (let child = element.firstChild;child; child = child.nextSibling) {
+        if (child.nodeType === 1 && isElementVisible(child))
+          return { visible: true, inline: false, cursor };
+        if (child.nodeType === 3 && isVisibleTextNode(child))
+          return { visible: true, inline: true, cursor };
+      }
+      return { visible: false, inline: false, cursor };
+    }
+    if (!isElementStyleVisibilityVisible(element, style))
+      return { cursor, visible: false, inline: false };
+    const rect = element.getBoundingClientRect();
+    return { cursor, visible: rect.width > 0 && rect.height > 0, inline: style.display === "inline" };
+  }
+  function isElementVisible(element) {
+    return computeBox(element).visible;
+  }
+  var kTextNodeRange = Symbol("playwrightTextNodeRange");
+  function isVisibleTextNode(node) {
+    const document2 = node.ownerDocument;
+    const range = document2[kTextNodeRange] ??= document2.createRange();
+    range.selectNode(node);
+    const rect = range.getBoundingClientRect();
+    const result = rect.width > 0 && rect.height > 0;
+    range.setStart(document2, 0);
+    range.collapse(true);
+    return result;
+  }
+  function elementSafeTagName(element) {
+    const tagName = element.tagName;
+    if (typeof tagName === "string") {
+      const firstCharCode = tagName.charCodeAt(0);
+      if (firstCharCode >= 97 && firstCharCode <= 122)
+        return tagName.toUpperCase();
+      return tagName;
+    }
+    if (element instanceof HTMLFormElement)
+      return "FORM";
+    return element.tagName.toUpperCase();
+  }
+  var cacheStyle;
+  var cacheStyleBefore;
+  var cacheStyleAfter;
+  var cacheStyleVisibility;
+  var cachesCounter = 0;
+  function beginDOMCaches() {
+    ++cachesCounter;
+    cacheStyle ??= new Map;
+    cacheStyleBefore ??= new Map;
+    cacheStyleAfter ??= new Map;
+    cacheStyleVisibility ??= new Map;
+  }
+  function endDOMCaches() {
+    if (!--cachesCounter) {
+      cacheStyle = undefined;
+      cacheStyleBefore = undefined;
+      cacheStyleAfter = undefined;
+      cacheStyleVisibility = undefined;
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright-js/src/stubs/roleUtils.ts
+  var ANCESTOR_PREVENTING_LANDMARK = "article:not([role]), aside:not([role]), main:not([role]), nav:not([role]), section:not([role]), [role=article], [role=complementary], [role=main], [role=navigation], [role=region]";
+  var VALID_ROLES = new Set([
+    "alert",
+    "alertdialog",
+    "application",
+    "article",
+    "banner",
+    "blockquote",
+    "button",
+    "caption",
+    "cell",
+    "checkbox",
+    "code",
+    "columnheader",
+    "combobox",
+    "complementary",
+    "contentinfo",
+    "definition",
+    "deletion",
+    "dialog",
+    "directory",
+    "document",
+    "emphasis",
+    "feed",
+    "figure",
+    "form",
+    "generic",
+    "grid",
+    "gridcell",
+    "group",
+    "heading",
+    "img",
+    "insertion",
+    "link",
+    "list",
+    "listbox",
+    "listitem",
+    "log",
+    "main",
+    "mark",
+    "marquee",
+    "math",
+    "meter",
+    "menu",
+    "menubar",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "navigation",
+    "none",
+    "note",
+    "option",
+    "paragraph",
+    "presentation",
+    "progressbar",
+    "radio",
+    "radiogroup",
+    "region",
+    "row",
+    "rowgroup",
+    "rowheader",
+    "scrollbar",
+    "search",
+    "searchbox",
+    "separator",
+    "slider",
+    "spinbutton",
+    "status",
+    "strong",
+    "subscript",
+    "superscript",
+    "switch",
+    "tab",
+    "table",
+    "tablist",
+    "tabpanel",
+    "term",
+    "textbox",
+    "time",
+    "timer",
+    "toolbar",
+    "tooltip",
+    "tree",
+    "treegrid",
+    "treeitem"
+  ]);
+  var ARIA_CHECKED_ROLES = new Set([
+    "checkbox",
+    "menuitemcheckbox",
+    "option",
+    "radio",
+    "switch",
+    "menuitemradio",
+    "treeitem"
+  ]);
+  var ARIA_READONLY_ROLES = new Set([
+    "checkbox",
+    "combobox",
+    "grid",
+    "gridcell",
+    "listbox",
+    "radiogroup",
+    "slider",
+    "spinbutton",
+    "textbox",
+    "columnheader",
+    "rowheader",
+    "searchbox",
+    "switch",
+    "treegrid"
+  ]);
+  var ARIA_DISABLED_ROLES = new Set([
+    "application",
+    "button",
+    "composite",
+    "gridcell",
+    "group",
+    "input",
+    "link",
+    "menuitem",
+    "scrollbar",
+    "separator",
+    "tab",
+    "checkbox",
+    "columnheader",
+    "combobox",
+    "grid",
+    "listbox",
+    "menu",
+    "menubar",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "option",
+    "radio",
+    "radiogroup",
+    "row",
+    "rowheader",
+    "searchbox",
+    "select",
+    "slider",
+    "spinbutton",
+    "switch",
+    "tablist",
+    "textbox",
+    "toolbar",
+    "tree",
+    "treegrid",
+    "treeitem"
+  ]);
+  var LABEL_PROHIBITED_ROLES = new Set([
+    "caption",
+    "code",
+    "deletion",
+    "emphasis",
+    "generic",
+    "insertion",
+    "paragraph",
+    "presentation",
+    "strong",
+    "subscript",
+    "superscript"
+  ]);
+  var ROLEDESCRIPTION_PROHIBITED_ROLES = new Set([
+    "generic"
+  ]);
+  var GLOBAL_ARIA_ATTRIBUTES = [
+    ["aria-atomic", undefined],
+    ["aria-busy", undefined],
+    ["aria-controls", undefined],
+    ["aria-current", undefined],
+    ["aria-describedby", undefined],
+    ["aria-details", undefined],
+    ["aria-dropeffect", undefined],
+    ["aria-flowto", undefined],
+    ["aria-grabbed", undefined],
+    ["aria-hidden", undefined],
+    ["aria-keyshortcuts", undefined],
+    ["aria-label", LABEL_PROHIBITED_ROLES],
+    ["aria-labelledby", LABEL_PROHIBITED_ROLES],
+    ["aria-live", undefined],
+    ["aria-owns", undefined],
+    ["aria-relevant", undefined],
+    ["aria-roledescription", ROLEDESCRIPTION_PROHIBITED_ROLES]
+  ];
+  var PRESENTATION_INHERITANCE_PARENTS = {
+    DD: new Set(["DL", "DIV"]),
+    DIV: new Set(["DL"]),
+    DT: new Set(["DL", "DIV"]),
+    LI: new Set(["OL", "UL"]),
+    TBODY: new Set(["TABLE"]),
+    TD: new Set(["TR"]),
+    TFOOT: new Set(["TABLE"]),
+    TH: new Set(["TR"]),
+    THEAD: new Set(["TABLE"]),
+    TR: new Set(["THEAD", "TBODY", "TFOOT", "TABLE"])
+  };
+  var INPUT_TYPE_TO_ROLE = {
+    button: "button",
+    checkbox: "checkbox",
+    image: "button",
+    number: "spinbutton",
+    radio: "radio",
+    range: "slider",
+    reset: "button",
+    submit: "button"
+  };
+  var TEXT_LIKE_INPUT_TYPES = new Set([
+    "email",
+    "search",
+    "tel",
+    "text",
+    "url",
+    ""
+  ]);
+  var NATIVELY_FOCUSABLE_TAGS = new Set([
+    "BUTTON",
+    "DETAILS",
+    "SELECT",
+    "TEXTAREA"
+  ]);
+  var NATIVE_FORM_CONTROL_TAGS = new Set([
+    "BUTTON",
+    "INPUT",
+    "SELECT",
+    "TEXTAREA",
+    "OPTION",
+    "OPTGROUP"
+  ]);
+  var NATIVE_READONLY_TAGS = new Set([
+    "INPUT",
+    "TEXTAREA",
+    "SELECT"
+  ]);
+  var STATIC_IMPLICIT_ROLES = {
+    ARTICLE: "article",
+    ASIDE: "complementary",
+    BLOCKQUOTE: "blockquote",
+    BUTTON: "button",
+    CAPTION: "caption",
+    CODE: "code",
+    DATALIST: "listbox",
+    DD: "definition",
+    DEL: "deletion",
+    DETAILS: "group",
+    DFN: "term",
+    DIALOG: "dialog",
+    DT: "term",
+    EM: "emphasis",
+    FIELDSET: "group",
+    FIGURE: "figure",
+    H1: "heading",
+    H2: "heading",
+    H3: "heading",
+    H4: "heading",
+    H5: "heading",
+    H6: "heading",
+    HR: "separator",
+    HTML: "document",
+    INS: "insertion",
+    LI: "listitem",
+    MAIN: "main",
+    MARK: "mark",
+    MATH: "math",
+    MENU: "list",
+    METER: "meter",
+    NAV: "navigation",
+    OL: "list",
+    OPTGROUP: "group",
+    OPTION: "option",
+    OUTPUT: "status",
+    P: "paragraph",
+    PROGRESS: "progressbar",
+    SEARCH: "search",
+    STRONG: "strong",
+    SUB: "subscript",
+    SUP: "superscript",
+    SVG: "img",
+    TABLE: "table",
+    TBODY: "rowgroup",
+    TEXTAREA: "textbox",
+    TFOOT: "rowgroup",
+    THEAD: "rowgroup",
+    TIME: "time",
+    TR: "row",
+    UL: "list"
+  };
+  var DYNAMIC_IMPLICIT_ROLES = {
+    A: (element) => element.hasAttribute("href") ? "link" : null,
+    AREA: (element) => element.hasAttribute("href") ? "link" : null,
+    FOOTER: (element) => closestCrossShadow(element, ANCESTOR_PREVENTING_LANDMARK) ? null : "contentinfo",
+    FORM: (element) => hasExplicitAccessibleName(element) ? "form" : null,
+    HEADER: (element) => closestCrossShadow(element, ANCESTOR_PREVENTING_LANDMARK) ? null : "banner",
+    IMG: (element) => element.getAttribute("alt") === "" && !element.getAttribute("title") && !hasGlobalAriaAttribute(element) && !hasTabIndex(element) ? "presentation" : "img",
+    INPUT: (element) => {
+      const type = element.type.toLowerCase();
+      if (TEXT_LIKE_INPUT_TYPES.has(type)) {
+        const list = getIdRefs(element, element.getAttribute("list"))[0];
+        if (list && elementSafeTagName(list) === "DATALIST")
+          return "combobox";
+        return type === "search" ? "searchbox" : "textbox";
+      }
+      if (type === "hidden")
+        return null;
+      if (type === "file")
+        return "button";
+      return (Object.hasOwn(INPUT_TYPE_TO_ROLE, type) ? INPUT_TYPE_TO_ROLE[type] : undefined) ?? "textbox";
+    },
+    SECTION: (element) => hasExplicitAccessibleName(element) ? "region" : null,
+    SELECT: (element) => isListBoxSelect(element) ? "listbox" : "combobox",
+    TD: (element) => {
+      const table = closestCrossShadow(element, "table");
+      const role = table ? getExplicitAriaRole(table) : "";
+      return role === "grid" || role === "treegrid" ? "gridcell" : "cell";
+    },
+    TH: (element) => {
+      const scope = element.getAttribute("scope");
+      if (scope === "col" || scope === "colgroup")
+        return "columnheader";
+      if (scope === "row" || scope === "rowgroup")
+        return "rowheader";
+      const nextSibling = element.nextElementSibling;
+      const prevSibling = element.previousElementSibling;
+      const row = element.parentElement && elementSafeTagName(element.parentElement) === "TR" ? element.parentElement : undefined;
+      if (!nextSibling && !prevSibling) {
+        if (row) {
+          const table = closestCrossShadow(row, "table");
+          if (table && table.rows.length <= 1)
+            return null;
+        }
+        return "columnheader";
+      }
+      if (isHeaderCell(nextSibling) && isHeaderCell(prevSibling))
+        return "columnheader";
+      if (isNonEmptyDataCell(nextSibling) || isNonEmptyDataCell(prevSibling))
+        return "rowheader";
+      return "columnheader";
+    }
+  };
+  function hasExplicitAccessibleName(element) {
+    return element.hasAttribute("aria-label") || element.hasAttribute("aria-labelledby");
+  }
+  function hasGlobalAriaAttribute(element, forRole) {
+    const role = forRole || "";
+    return GLOBAL_ARIA_ATTRIBUTES.some(([attr, prohibited]) => !prohibited?.has(role) && element.hasAttribute(attr));
+  }
+  function hasTabIndex(element) {
+    return !Number.isNaN(Number(String(element.getAttribute("tabindex"))));
+  }
+  function isNativelyFocusable(element) {
+    const tagName = elementSafeTagName(element);
+    if (NATIVELY_FOCUSABLE_TAGS.has(tagName))
+      return true;
+    if (tagName === "A" || tagName === "AREA")
+      return element.hasAttribute("href");
+    if (tagName === "INPUT")
+      return !element.hidden;
+    return false;
+  }
+  function isFocusable(element) {
+    return !isNativelyDisabled(element) && (isNativelyFocusable(element) || hasTabIndex(element));
+  }
+  function isHeaderCell(element) {
+    return !!element && elementSafeTagName(element) === "TH";
+  }
+  function isNonEmptyDataCell(element) {
+    if (!element || elementSafeTagName(element) !== "TD")
+      return false;
+    return !!(element.textContent?.trim() || element.children.length > 0);
+  }
+  function getExplicitAriaRole(element) {
+    const roles = (element.getAttribute("role") || "").split(" ").map((role) => role.trim());
+    return roles.find((role) => VALID_ROLES.has(role)) || null;
+  }
+  function hasPresentationConflictResolution(element, role) {
+    return hasGlobalAriaAttribute(element, role) || isFocusable(element);
+  }
+  function lookupImplicitRole(element) {
+    const tagName = elementSafeTagName(element);
+    if (Object.hasOwn(STATIC_IMPLICIT_ROLES, tagName))
+      return STATIC_IMPLICIT_ROLES[tagName] ?? null;
+    if (Object.hasOwn(DYNAMIC_IMPLICIT_ROLES, tagName))
+      return DYNAMIC_IMPLICIT_ROLES[tagName]?.(element) ?? null;
+    return null;
+  }
+  function getImplicitAriaRole(element) {
+    const implicitRole = lookupImplicitRole(element);
+    if (!implicitRole)
+      return null;
+    let ancestor = element;
+    while (ancestor) {
+      const parent = parentElementOrShadowHost(ancestor);
+      const ancestorTag = elementSafeTagName(ancestor);
+      const parents = Object.hasOwn(PRESENTATION_INHERITANCE_PARENTS, ancestorTag) ? PRESENTATION_INHERITANCE_PARENTS[ancestorTag] : undefined;
+      if (!parents || !parent || !parents.has(elementSafeTagName(parent)))
+        break;
+      const parentExplicitRole = getExplicitAriaRole(parent);
+      if ((parentExplicitRole === "none" || parentExplicitRole === "presentation") && !hasPresentationConflictResolution(parent, parentExplicitRole))
+        return parentExplicitRole;
+      ancestor = parent;
+    }
+    return implicitRole;
+  }
+  function getIdRefs(element, ref) {
+    if (!ref)
+      return [];
+    const root = enclosingShadowRootOrDocument(element);
+    if (!root)
+      return [];
+    try {
+      const ids = ref.split(" ").filter((id) => !!id);
+      const result = [];
+      for (const id of ids) {
+        const firstElement = root.querySelector(`#${CSS.escape(id)}`);
+        if (firstElement && !result.includes(firstElement))
+          result.push(firstElement);
+      }
+      return result;
+    } catch {
+      return [];
+    }
+  }
+  function belongsToDisabledOptGroup(element) {
+    return elementSafeTagName(element) === "OPTION" && !!element.closest("OPTGROUP[DISABLED]");
+  }
+  function belongsToDisabledFieldSet(element) {
+    const fieldSetElement = element?.closest("FIELDSET[DISABLED]");
+    if (!fieldSetElement)
+      return false;
+    const legendElement = fieldSetElement.querySelector(":scope > LEGEND");
+    return !legendElement?.contains(element);
+  }
+  function isNativelyDisabled(element) {
+    return NATIVE_FORM_CONTROL_TAGS.has(elementSafeTagName(element)) && (element.hasAttribute("disabled") || belongsToDisabledOptGroup(element) || belongsToDisabledFieldSet(element));
+  }
+  function hasAriaDisabledInChain(element) {
+    let current = element;
+    while (current) {
+      const attribute = (current.getAttribute("aria-disabled") || "").toLowerCase();
+      if (attribute === "true")
+        return true;
+      if (attribute === "false")
+        return false;
+      current = parentElementOrShadowHost(current);
+    }
+    return false;
+  }
+  function hasExplicitAriaDisabled(element) {
+    if (!ARIA_DISABLED_ROLES.has(computeAriaRole(element) || ""))
+      return false;
+    return hasAriaDisabledInChain(element);
+  }
+  function getChecked(element, allowMixed) {
+    const tagName = elementSafeTagName(element);
+    if (allowMixed && tagName === "INPUT" && element.indeterminate)
+      return "mixed";
+    if (tagName === "INPUT" && (element.type === "checkbox" || element.type === "radio"))
+      return element.checked;
+    if (ARIA_CHECKED_ROLES.has(computeAriaRole(element) || "")) {
+      const checked = element.getAttribute("aria-checked");
+      if (checked === "true")
+        return true;
+      if (allowMixed && checked === "mixed")
+        return "mixed";
+      return false;
+    }
+    return "error";
+  }
+  function unsupportedInPage(name) {
+    throw new Error(`${name}: accessible name, description, and error message computation runs in Rust, not in the page`);
+  }
+  function computeAriaRole(element) {
+    const explicitRole = getExplicitAriaRole(element);
+    if (!explicitRole)
+      return getImplicitAriaRole(element);
+    if (explicitRole === "none" || explicitRole === "presentation") {
+      const implicitRole = getImplicitAriaRole(element);
+      if (hasPresentationConflictResolution(element, implicitRole))
+        return implicitRole;
+    }
+    return explicitRole;
+  }
+  function getAriaRole(_element) {
+    return null;
+  }
+  function getAriaDisabled(element) {
+    return isNativelyDisabled(element) || hasExplicitAriaDisabled(element);
+  }
+  function getReadonly(element) {
+    const tagName = elementSafeTagName(element);
+    if (NATIVE_READONLY_TAGS.has(tagName))
+      return element.hasAttribute("readonly");
+    if (ARIA_READONLY_ROLES.has(computeAriaRole(element) || ""))
+      return element.getAttribute("aria-readonly") === "true";
+    if (element.isContentEditable)
+      return false;
+    return "error";
+  }
+  function getCheckedAllowMixed(element) {
+    return getChecked(element, true);
+  }
+  function getCheckedWithoutMixed(element) {
+    return getChecked(element, false);
+  }
+  function getAriaLabelledByElements(element) {
+    const ref = element.getAttribute("aria-labelledby");
+    if (ref === null)
+      return null;
+    const refs = getIdRefs(element, ref);
+    return refs.length ? refs : null;
+  }
+  function beginAriaCaches() {}
+  function endAriaCaches() {}
+  function getElementAccessibleName(_element, _includeHidden) {
+    return unsupportedInPage("getElementAccessibleName");
+  }
+  function getElementAccessibleNameText(_element, _includeHidden) {
+    return unsupportedInPage("getElementAccessibleNameText");
+  }
+  function getElementAccessibleDescription(_element, _includeHidden) {
+    return unsupportedInPage("getElementAccessibleDescription");
+  }
+  function getElementAccessibleErrorMessage(_element) {
+    return unsupportedInPage("getElementAccessibleErrorMessage");
   }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/pointer-targets.ts
@@ -1701,7 +2338,7 @@
       return { kind: "detached" };
     return { kind: "value", value: lookAt(world, element, request.look) };
   }
-  function lookAt(world, element, ask, aria = coverAriaFor(world)) {
+  function lookAt(world, element, ask) {
     coverWrappers.delete(element);
     if (!isTextInput(element))
       return { refusal: { code: "notAnInput" } };
@@ -1712,7 +2349,7 @@
         behavior: "instant"
       });
     const facts = factsOf(element);
-    const refusal = firstRefusal(world, element, facts, ask, aria);
+    const refusal = firstRefusal(world, element, facts, ask);
     const moved = ask.expect !== undefined && limitMove(facts, ask.expect, ask) === "fits";
     return {
       facts,
@@ -1720,7 +2357,7 @@
       ...moved ? { maxLengthMoved: true } : {}
     };
   }
-  function firstRefusal(world, element, facts, ask, aria) {
+  function firstRefusal(world, element, facts, ask) {
     const { expect } = ask;
     if (expect && facts.origin !== expect.origin)
       return { code: "wrongOrigin" };
@@ -1736,7 +2373,7 @@
         return { code: "boxHidden" };
     } else if (!world.injected.elementState(element, "visible", ask.frameVisible).matches)
       return { code: "boxHidden" };
-    else if (blocked(world, element, ask.keys, aria))
+    else if (blocked(element, ask.keys, ask.name))
       return { code: "boxCovered" };
     if (ask.length !== undefined && !ask.cut && facts.maxLength !== null && MAXLENGTH_TYPES.has(facts.type) && ask.length > facts.maxLength)
       return { code: "valueTooLong" };
@@ -1811,20 +2448,20 @@
   function coverWrapper(box) {
     return coverWrappers.get(box);
   }
-  function blocked(world, box, keys, aria) {
+  function blocked(box, keys, name) {
     const blocker = blockerOf(box);
     if (blocker === null)
       return false;
     if (blocker === "unread")
       return true;
-    const wrapper = drawingOf(world, box, blocker, keys, aria);
+    const wrapper = drawingOf(box, blocker, keys, name);
     if (!wrapper)
       return true;
     coverWrappers.set(box, wrapper);
     return false;
   }
   var CONTROLS = "input, textarea, select, button, a[href], iframe, frame, [contenteditable], [tabindex]";
-  function drawingOf(world, box, blocker, keys, aria = coverAriaFor(world)) {
+  function drawingOf(box, blocker, keys, name) {
     if (blocker.ownerDocument !== box.ownerDocument)
       return null;
     const parent = box.parentElement;
@@ -1846,8 +2483,25 @@
     const text = renderedText(cover);
     if (fold(text) === "")
       return keys ? wrapper : null;
-    const name = aria.nameOf(box);
-    return sameName(text, name) ? wrapper : null;
+    return sameName(text, name ?? labelOf(box)) ? wrapper : null;
+  }
+  function labelOf(element) {
+    const reads = [
+      () => (getAriaLabelledByElements(element) ?? []).map(renderedText).join(" "),
+      () => element.getAttribute("aria-label") ?? "",
+      () => {
+        const labels = Reflect.get(element, "labels");
+        return labels instanceof NodeList ? Array.from(labels, (label) => label instanceof Element ? renderedText(label) : "").join(" ") : "";
+      },
+      () => element.getAttribute("title") ?? "",
+      () => element.getAttribute("placeholder") ?? ""
+    ];
+    for (const read of reads) {
+      const text = read().replace(/\s+/g, " ").trim();
+      if (text)
+        return text;
+    }
+    return "";
   }
   function labelsAnother(cover, box) {
     const labels = [cover, ...cover.querySelectorAll("label")];
@@ -1927,419 +2581,6 @@
     return false;
   }
 
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot.ts
-  function hasPointerCursor(ariaNode) {
-    return ariaNode.box.cursor === "pointer";
-  }
-  function parseAriaSnapshot(yaml, text, options = {}) {
-    const lineCounter = new yaml.LineCounter;
-    const parseOptions = {
-      keepSourceTokens: true,
-      lineCounter,
-      ...options
-    };
-    const yamlDoc = yaml.parseDocument(text, parseOptions);
-    const errors = [];
-    const convertRange = (range) => {
-      return [lineCounter.linePos(range[0]), lineCounter.linePos(range[1])];
-    };
-    const addError = (error) => {
-      errors.push({
-        message: error.message,
-        range: [lineCounter.linePos(error.pos[0]), lineCounter.linePos(error.pos[1])]
-      });
-    };
-    const convertSeq = (container, seq) => {
-      for (const item of seq.items) {
-        const itemIsString = item instanceof yaml.Scalar && typeof item.value === "string";
-        if (itemIsString) {
-          const childNode = KeyParser.parse(item, parseOptions, errors);
-          if (childNode) {
-            container.children = container.children || [];
-            container.children.push(childNode);
-          }
-          continue;
-        }
-        const itemIsMap = item instanceof yaml.YAMLMap;
-        if (itemIsMap) {
-          convertMap(container, item);
-          continue;
-        }
-        errors.push({
-          message: "Sequence items should be strings or maps",
-          range: convertRange(item.range || seq.range)
-        });
-      }
-    };
-    const convertMap = (container, map) => {
-      for (const entry of map.items) {
-        container.children = container.children || [];
-        const keyIsString = entry.key instanceof yaml.Scalar && typeof entry.key.value === "string";
-        if (!keyIsString) {
-          errors.push({
-            message: "Only string keys are supported",
-            range: convertRange(entry.key.range || map.range)
-          });
-          continue;
-        }
-        const key = entry.key;
-        const value = entry.value;
-        if (key.value === "text") {
-          const valueIsString = value instanceof yaml.Scalar && typeof value.value === "string";
-          if (!valueIsString) {
-            errors.push({
-              message: "Text value should be a string",
-              range: convertRange(entry.value.range || map.range)
-            });
-            continue;
-          }
-          container.children.push({
-            kind: "text",
-            text: textValue(value.value)
-          });
-          continue;
-        }
-        if (key.value === "/children") {
-          const valueIsString = value instanceof yaml.Scalar && typeof value.value === "string";
-          if (!valueIsString || value.value !== "contain" && value.value !== "equal" && value.value !== "deep-equal") {
-            errors.push({
-              message: 'Strict value should be "contain", "equal" or "deep-equal"',
-              range: convertRange(entry.value.range || map.range)
-            });
-            continue;
-          }
-          container.containerMode = value.value;
-          continue;
-        }
-        if (key.value.startsWith("/")) {
-          const valueIsString = value instanceof yaml.Scalar && typeof value.value === "string";
-          if (!valueIsString) {
-            errors.push({
-              message: "Property value should be a string",
-              range: convertRange(entry.value.range || map.range)
-            });
-            continue;
-          }
-          container.props = container.props ?? {};
-          container.props[key.value.slice(1)] = textValue(value.value);
-          continue;
-        }
-        const childNode = KeyParser.parse(key, parseOptions, errors);
-        if (!childNode)
-          continue;
-        const valueIsScalar = value instanceof yaml.Scalar;
-        if (valueIsScalar) {
-          const type = typeof value.value;
-          if (type !== "string" && type !== "number" && type !== "boolean") {
-            errors.push({
-              message: "Node value should be a string or a sequence",
-              range: convertRange(entry.value.range || map.range)
-            });
-            continue;
-          }
-          container.children.push({
-            ...childNode,
-            children: [{
-              kind: "text",
-              text: textValue(String(value.value))
-            }]
-          });
-          continue;
-        }
-        const valueIsSequence = value instanceof yaml.YAMLSeq;
-        if (valueIsSequence) {
-          container.children.push(childNode);
-          convertSeq(childNode, value);
-          continue;
-        }
-        errors.push({
-          message: "Map values should be strings or sequences",
-          range: convertRange(entry.value.range || map.range)
-        });
-      }
-    };
-    const fragment = { kind: "role", role: "fragment" };
-    yamlDoc.errors.forEach(addError);
-    if (errors.length)
-      return { errors, fragment };
-    if (!(yamlDoc.contents instanceof yaml.YAMLSeq)) {
-      errors.push({
-        message: 'Aria snapshot must be a YAML sequence, elements starting with " -"',
-        range: yamlDoc.contents ? convertRange(yamlDoc.contents.range) : [{ line: 0, col: 0 }, { line: 0, col: 0 }]
-      });
-    }
-    if (errors.length)
-      return { errors, fragment };
-    convertSeq(fragment, yamlDoc.contents);
-    if (errors.length)
-      return { errors, fragment: emptyFragment };
-    if (fragment.children?.length === 1 && (!fragment.containerMode || fragment.containerMode === "contain"))
-      return { fragment: fragment.children[0], errors: [] };
-    return { fragment, errors: [] };
-  }
-  var emptyFragment = { kind: "role", role: "fragment" };
-  function normalizeWhitespace(text) {
-    return text.replace(/[\u200b\u00ad]/g, "").replace(/[\r\n\s\t]+/g, " ").trim();
-  }
-  function textValue(value) {
-    return {
-      raw: value,
-      normalized: normalizeWhitespace(value)
-    };
-  }
-
-  class KeyParser {
-    _input;
-    _pos;
-    _length;
-    static parse(text, options, errors) {
-      try {
-        return new KeyParser(text.value)._parse();
-      } catch (e) {
-        if (e instanceof ParserError) {
-          const message = options.prettyErrors === false ? e.message : e.message + `:
-
-` + text.value + `
-` + " ".repeat(e.pos) + `^
-`;
-          errors.push({
-            message,
-            range: [options.lineCounter.linePos(text.range[0]), options.lineCounter.linePos(text.range[0] + e.pos)]
-          });
-          return null;
-        }
-        throw e;
-      }
-    }
-    constructor(input) {
-      this._input = input;
-      this._pos = 0;
-      this._length = input.length;
-    }
-    _peek() {
-      return this._input[this._pos] || "";
-    }
-    _next() {
-      if (this._pos < this._length)
-        return this._input[this._pos++];
-      return null;
-    }
-    _eof() {
-      return this._pos >= this._length;
-    }
-    _isWhitespace() {
-      return !this._eof() && /\s/.test(this._peek());
-    }
-    _skipWhitespace() {
-      while (this._isWhitespace())
-        this._pos++;
-    }
-    _readIdentifier(type) {
-      if (this._eof())
-        this._throwError(`Unexpected end of input when expecting ${type}`);
-      const start = this._pos;
-      while (!this._eof() && /[a-zA-Z]/.test(this._peek()))
-        this._pos++;
-      return this._input.slice(start, this._pos);
-    }
-    _readString() {
-      let result = "";
-      let escaped = false;
-      while (!this._eof()) {
-        const ch = this._next();
-        if (escaped) {
-          result += ch;
-          escaped = false;
-        } else if (ch === "\\") {
-          escaped = true;
-        } else if (ch === '"') {
-          return result;
-        } else {
-          result += ch;
-        }
-      }
-      this._throwError("Unterminated string");
-    }
-    _throwError(message, offset = 0) {
-      throw new ParserError(message, offset || this._pos);
-    }
-    _readRegex() {
-      let result = "";
-      let escaped = false;
-      let insideClass = false;
-      while (!this._eof()) {
-        const ch = this._next();
-        if (escaped) {
-          result += ch;
-          escaped = false;
-        } else if (ch === "\\") {
-          escaped = true;
-          result += ch;
-        } else if (ch === "/" && !insideClass) {
-          return { pattern: result };
-        } else if (ch === "[") {
-          insideClass = true;
-          result += ch;
-        } else if (ch === "]" && insideClass) {
-          result += ch;
-          insideClass = false;
-        } else {
-          result += ch;
-        }
-      }
-      this._throwError("Unterminated regex");
-    }
-    _readStringOrRegex() {
-      const ch = this._peek();
-      if (ch === '"') {
-        this._next();
-        return normalizeWhitespace(this._readString());
-      }
-      if (ch === "/") {
-        this._next();
-        return this._readRegex();
-      }
-      return null;
-    }
-    _readAttributes(result) {
-      let errorPos = this._pos;
-      while (true) {
-        this._skipWhitespace();
-        if (this._peek() === "[") {
-          this._next();
-          this._skipWhitespace();
-          errorPos = this._pos;
-          const flagName = this._readIdentifier("attribute");
-          this._skipWhitespace();
-          let flagValue = "";
-          if (this._peek() === "=") {
-            this._next();
-            this._skipWhitespace();
-            errorPos = this._pos;
-            while (this._peek() !== "]" && !this._isWhitespace() && !this._eof())
-              flagValue += this._next();
-          }
-          this._skipWhitespace();
-          if (this._peek() !== "]")
-            this._throwError("Expected ]");
-          this._next();
-          this._applyAttribute(result, flagName, flagValue || "true", errorPos);
-        } else {
-          break;
-        }
-      }
-    }
-    _parse() {
-      this._skipWhitespace();
-      const role = this._readIdentifier("role");
-      this._skipWhitespace();
-      const name = this._readStringOrRegex() || "";
-      const result = { kind: "role", role, name };
-      this._readAttributes(result);
-      this._skipWhitespace();
-      if (!this._eof())
-        this._throwError("Unexpected input");
-      return result;
-    }
-    _applyAttribute(node, key, value, errorPos) {
-      if (key === "checked") {
-        this._assert(value === "true" || value === "false" || value === "mixed", 'Value of "checked" attribute must be a boolean or "mixed"', errorPos);
-        node.checked = value === "true" ? true : value === "false" ? false : "mixed";
-        return;
-      }
-      if (key === "disabled") {
-        this._assert(value === "true" || value === "false", 'Value of "disabled" attribute must be a boolean', errorPos);
-        node.disabled = value === "true";
-        return;
-      }
-      if (key === "expanded") {
-        this._assert(value === "true" || value === "false", 'Value of "expanded" attribute must be a boolean', errorPos);
-        node.expanded = value === "true";
-        return;
-      }
-      if (key === "active") {
-        this._assert(value === "true" || value === "false", 'Value of "active" attribute must be a boolean', errorPos);
-        node.active = value === "true";
-        return;
-      }
-      if (key === "invalid") {
-        this._assert(value === "true" || value === "false" || value === "grammar" || value === "spelling", 'Value of "invalid" attribute must be a boolean, "grammar" or "spelling"', errorPos);
-        node.invalid = value === "true" ? true : value === "false" ? false : value;
-        return;
-      }
-      if (key === "level") {
-        this._assert(!isNaN(Number(value)), 'Value of "level" attribute must be a number', errorPos);
-        node.level = Number(value);
-        return;
-      }
-      if (key === "pressed") {
-        this._assert(value === "true" || value === "false" || value === "mixed", 'Value of "pressed" attribute must be a boolean or "mixed"', errorPos);
-        node.pressed = value === "true" ? true : value === "false" ? false : "mixed";
-        return;
-      }
-      if (key === "selected") {
-        this._assert(value === "true" || value === "false", 'Value of "selected" attribute must be a boolean', errorPos);
-        node.selected = value === "true";
-        return;
-      }
-      this._assert(false, `Unsupported attribute [${key}]`, errorPos);
-    }
-    _assert(value, message, valuePos) {
-      if (!value)
-        this._throwError(message || "Assertion error", valuePos);
-    }
-  }
-
-  class ParserError extends Error {
-    pos;
-    constructor(message, pos) {
-      super(message);
-      this.pos = pos;
-    }
-  }
-  function findNewNode(from, to) {
-    function fillMap(root, map, position) {
-      let size = 1;
-      let childPosition = position + size;
-      for (const child of root.children || []) {
-        if (typeof child === "string") {
-          size++;
-          childPosition++;
-        } else {
-          size += fillMap(child, map, childPosition);
-          childPosition += size;
-        }
-      }
-      if (!["none", "presentation", "fragment", "iframe", "generic"].includes(root.role) && root.name) {
-        let byRole = map.get(root.role);
-        if (!byRole) {
-          byRole = new Map;
-          map.set(root.role, byRole);
-        }
-        const existing = byRole.get(root.name);
-        const sizeAndPosition = size * 100 - position;
-        if (!existing || existing.sizeAndPosition < sizeAndPosition)
-          byRole.set(root.name, { node: root, sizeAndPosition });
-      }
-      return size;
-    }
-    const fromMap = new Map;
-    if (from)
-      fillMap(from, fromMap, 0);
-    const toMap = new Map;
-    fillMap(to, toMap, 0);
-    const result = [];
-    for (const [role, byRole] of toMap) {
-      for (const [name, byName] of byRole) {
-        const inFrom = fromMap.get(role)?.get(name);
-        if (!inFrom)
-          result.push(byName);
-      }
-    }
-    result.sort((a, b) => b.sizeAndPosition - a.sizeAndPosition);
-    return result[0]?.node;
-  }
-
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/stringUtils.ts
   function escapeWithQuotes(text, char = "'") {
     const stringified = JSON.stringify(text);
@@ -2405,14 +2646,6 @@
   function trimStringWithEllipsis(input, cap) {
     return trimString(input, cap, "…");
   }
-  function truncateDataUrl(url) {
-    if (!url.startsWith("data:"))
-      return url;
-    const comma = url.indexOf(",");
-    if (comma === -1)
-      return url;
-    return url.slice(0, comma + 1) + "…";
-  }
   function escapeRegExp(s) {
     return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   }
@@ -2436,204 +2669,6 @@
     return s1.slice(endingIndex - maxLen, endingIndex);
   }
   var ansiRegex = new RegExp("([\\u001B\\u009B][[\\]()#?]*(?:(?:(?:[a-zA-Z\\d]*(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)|(?:(?:\\d{0,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-ntqry=><~])))", "g");
-
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/yaml.ts
-  function yamlEscapeKeyIfNeeded(str) {
-    if (!yamlStringNeedsQuotes(str))
-      return str;
-    return `'` + str.replace(/'/g, `''`) + `'`;
-  }
-  function yamlEscapeValueIfNeeded(str) {
-    if (!yamlStringNeedsQuotes(str))
-      return str;
-    return '"' + str.replace(/[\\"\x00-\x1f\x7f-\x9f]/g, (c) => {
-      switch (c) {
-        case "\\":
-          return "\\\\";
-        case '"':
-          return "\\\"";
-        case "\b":
-          return "\\b";
-        case "\f":
-          return "\\f";
-        case `
-`:
-          return "\\n";
-        case "\r":
-          return "\\r";
-        case "\t":
-          return "\\t";
-        default:
-          const code = c.charCodeAt(0);
-          return "\\x" + code.toString(16).padStart(2, "0");
-      }
-    }) + '"';
-  }
-  function yamlStringNeedsQuotes(str) {
-    if (str.length === 0)
-      return true;
-    if (/^\s|\s$/.test(str))
-      return true;
-    if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(str))
-      return true;
-    if (/^-/.test(str))
-      return true;
-    if (/[\n:](\s|$)/.test(str))
-      return true;
-    if (/\s#/.test(str))
-      return true;
-    if (/[\n\r]/.test(str))
-      return true;
-    if (/^[&*\],?!>|@"'#%]/.test(str))
-      return true;
-    if (/[{}`]/.test(str))
-      return true;
-    if (/^\[/.test(str))
-      return true;
-    if (!isNaN(Number(str)) || ["y", "n", "yes", "no", "true", "false", "on", "off", "null"].includes(str.toLowerCase()))
-      return true;
-    return false;
-  }
-
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshotRenderer.ts
-  function renderAriaSnapshotAsYaml(snapshot, options = {}) {
-    const lines = [];
-    const includeText = options.convertStringsToRegex ? textContributesInfo : () => true;
-    const renderString = options.convertStringsToRegex ? convertToBestGuessRegex : (str) => str;
-    const visitText = (text, depth) => {
-      const escaped = yamlEscapeValueIfNeeded(renderString(text));
-      if (escaped)
-        lines.push(indent(depth) + "- text: " + escaped);
-    };
-    const createKey = (node) => {
-      let key = node.role;
-      if (node.name && node.name.length <= 900) {
-        const name = renderString(node.name);
-        if (name) {
-          const isRegex = options.convertStringsToRegex && name !== node.name;
-          key += " " + (isRegex ? name : JSON.stringify(name));
-        }
-      }
-      if (node.checked === "mixed")
-        key += ` [checked=mixed]`;
-      if (node.checked === true)
-        key += ` [checked]`;
-      if (node.disabled)
-        key += ` [disabled]`;
-      if (node.expanded)
-        key += ` [expanded]`;
-      if (node.active)
-        key += ` [active]`;
-      if (node.invalid === "grammar" || node.invalid === "spelling")
-        key += ` [invalid=${node.invalid}]`;
-      if (node.invalid === true)
-        key += ` [invalid]`;
-      if (node.level)
-        key += ` [level=${node.level}]`;
-      if (node.pressed === "mixed")
-        key += ` [pressed=mixed]`;
-      if (node.pressed === true)
-        key += ` [pressed]`;
-      if (node.selected === true)
-        key += ` [selected]`;
-      if (node.ariaHidden)
-        key += ` [aria-hidden]`;
-      if (node.ref) {
-        key += ` [ref=${node.ref}]`;
-        if (node.cursor === "pointer")
-          key += " [cursor=pointer]";
-      }
-      if (node.box)
-        key += ` [box=${node.box.x},${node.box.y},${node.box.width},${node.box.height}]`;
-      return key;
-    };
-    const visit = (node, depth) => {
-      if (node.role === "text") {
-        visitText(node.text || "", depth);
-        return;
-      }
-      options.lineToNode?.set(lines.length, node);
-      const escapedKey = indent(depth) + "- " + yamlEscapeKeyIfNeeded(createKey(node));
-      const props = [];
-      if (node.url !== undefined)
-        props.push(["url", node.url]);
-      if (node.placeholder !== undefined)
-        props.push(["placeholder", node.placeholder]);
-      if (node.text === undefined && !props.length && !node.children?.length) {
-        lines.push(escapedKey);
-      } else if (node.text !== undefined && !props.length) {
-        if (includeText(node, node.text))
-          lines.push(escapedKey + ": " + yamlEscapeValueIfNeeded(renderString(node.text)));
-        else
-          lines.push(escapedKey);
-      } else {
-        lines.push(escapedKey + ":");
-        for (const [name, value] of props)
-          lines.push(indent(depth + 1) + "- /" + name + ": " + yamlEscapeValueIfNeeded(value));
-        if (node.text !== undefined) {
-          visitText(includeText(node, node.text) ? node.text : "", depth + 1);
-        } else {
-          for (const child of node.children || []) {
-            if (typeof child === "string")
-              visitText(includeText(node, child) ? child : "", depth + 1);
-            else
-              visit(child, depth + 1);
-          }
-        }
-      }
-    };
-    for (const node of snapshot)
-      visit(node, 0);
-    return lines.join(`
-`);
-  }
-  function indent(depth) {
-    return "  ".repeat(depth);
-  }
-  function convertToBestGuessRegex(text) {
-    const dynamicContent = [
-      { regex: /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/, replacement: "[0-9a-fA-F-]+" },
-      { regex: /\b[\d,.]+[bkmBKM]+\b/, replacement: "[\\d,.]+[bkmBKM]+" },
-      { regex: /\b\d+[hmsp]+\b/, replacement: "\\d+[hmsp]+" },
-      { regex: /\b[\d,.]+[hmsp]+\b/, replacement: "[\\d,.]+[hmsp]+" },
-      { regex: /\b\d+,\d+\b/, replacement: "\\d+,\\d+" },
-      { regex: /\b\d+\.\d{2,}\b/, replacement: "\\d+\\.\\d+" },
-      { regex: /\b\d{2,}\.\d+\b/, replacement: "\\d+\\.\\d+" },
-      { regex: /\b\d{2,}\b/, replacement: "\\d+" }
-    ];
-    let pattern = "";
-    let lastIndex = 0;
-    const combinedRegex = new RegExp(dynamicContent.map((r) => "(" + r.regex.source + ")").join("|"), "g");
-    text.replace(combinedRegex, (match, ...args) => {
-      const offset = args[args.length - 2];
-      const groups = args.slice(0, -2);
-      pattern += escapeRegExp(text.slice(lastIndex, offset));
-      for (let i = 0;i < groups.length; i++) {
-        if (groups[i]) {
-          const { replacement } = dynamicContent[i];
-          pattern += replacement;
-          break;
-        }
-      }
-      lastIndex = offset + match.length;
-      return match;
-    });
-    if (!pattern)
-      return text;
-    pattern += escapeRegExp(text.slice(lastIndex));
-    return String(new RegExp(pattern));
-  }
-  function textContributesInfo(node, text) {
-    if (!text.length)
-      return false;
-    if (!node.name)
-      return true;
-    const substr = text.length <= 200 && node.name.length <= 200 ? longestCommonSubstring(text, node.name) : "";
-    let filtered = text;
-    while (substr && filtered.includes(substr))
-      filtered = filtered.replace(substr, "");
-    return filtered.trim().length / text.length > 0.1;
-  }
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/locatorGenerators.ts
   function asLocator(lang, selector, isFrameLocator = false) {
@@ -3306,1811 +3341,595 @@
     return obj instanceof RegExp;
   }
 
+  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshot.ts
+  function parseAriaSnapshot(yaml, text, options = {}) {
+    const lineCounter = new yaml.LineCounter;
+    const parseOptions = {
+      keepSourceTokens: true,
+      lineCounter,
+      ...options
+    };
+    const yamlDoc = yaml.parseDocument(text, parseOptions);
+    const errors = [];
+    const convertRange = (range) => {
+      return [lineCounter.linePos(range[0]), lineCounter.linePos(range[1])];
+    };
+    const addError = (error) => {
+      errors.push({
+        message: error.message,
+        range: [lineCounter.linePos(error.pos[0]), lineCounter.linePos(error.pos[1])]
+      });
+    };
+    const convertSeq = (container, seq) => {
+      for (const item of seq.items) {
+        const itemIsString = item instanceof yaml.Scalar && typeof item.value === "string";
+        if (itemIsString) {
+          const childNode = KeyParser.parse(item, parseOptions, errors);
+          if (childNode) {
+            container.children = container.children || [];
+            container.children.push(childNode);
+          }
+          continue;
+        }
+        const itemIsMap = item instanceof yaml.YAMLMap;
+        if (itemIsMap) {
+          convertMap(container, item);
+          continue;
+        }
+        errors.push({
+          message: "Sequence items should be strings or maps",
+          range: convertRange(item.range || seq.range)
+        });
+      }
+    };
+    const convertMap = (container, map) => {
+      for (const entry of map.items) {
+        container.children = container.children || [];
+        const keyIsString = entry.key instanceof yaml.Scalar && typeof entry.key.value === "string";
+        if (!keyIsString) {
+          errors.push({
+            message: "Only string keys are supported",
+            range: convertRange(entry.key.range || map.range)
+          });
+          continue;
+        }
+        const key = entry.key;
+        const value = entry.value;
+        if (key.value === "text") {
+          const valueIsString = value instanceof yaml.Scalar && typeof value.value === "string";
+          if (!valueIsString) {
+            errors.push({
+              message: "Text value should be a string",
+              range: convertRange(entry.value.range || map.range)
+            });
+            continue;
+          }
+          container.children.push({
+            kind: "text",
+            text: textValue(value.value)
+          });
+          continue;
+        }
+        if (key.value === "/children") {
+          const valueIsString = value instanceof yaml.Scalar && typeof value.value === "string";
+          if (!valueIsString || value.value !== "contain" && value.value !== "equal" && value.value !== "deep-equal") {
+            errors.push({
+              message: 'Strict value should be "contain", "equal" or "deep-equal"',
+              range: convertRange(entry.value.range || map.range)
+            });
+            continue;
+          }
+          container.containerMode = value.value;
+          continue;
+        }
+        if (key.value.startsWith("/")) {
+          const valueIsString = value instanceof yaml.Scalar && typeof value.value === "string";
+          if (!valueIsString) {
+            errors.push({
+              message: "Property value should be a string",
+              range: convertRange(entry.value.range || map.range)
+            });
+            continue;
+          }
+          container.props = container.props ?? {};
+          container.props[key.value.slice(1)] = textValue(value.value);
+          continue;
+        }
+        const childNode = KeyParser.parse(key, parseOptions, errors);
+        if (!childNode)
+          continue;
+        const valueIsScalar = value instanceof yaml.Scalar;
+        if (valueIsScalar) {
+          const type = typeof value.value;
+          if (type !== "string" && type !== "number" && type !== "boolean") {
+            errors.push({
+              message: "Node value should be a string or a sequence",
+              range: convertRange(entry.value.range || map.range)
+            });
+            continue;
+          }
+          container.children.push({
+            ...childNode,
+            children: [{
+              kind: "text",
+              text: textValue(String(value.value))
+            }]
+          });
+          continue;
+        }
+        const valueIsSequence = value instanceof yaml.YAMLSeq;
+        if (valueIsSequence) {
+          container.children.push(childNode);
+          convertSeq(childNode, value);
+          continue;
+        }
+        errors.push({
+          message: "Map values should be strings or sequences",
+          range: convertRange(entry.value.range || map.range)
+        });
+      }
+    };
+    const fragment = { kind: "role", role: "fragment" };
+    yamlDoc.errors.forEach(addError);
+    if (errors.length)
+      return { errors, fragment };
+    if (!(yamlDoc.contents instanceof yaml.YAMLSeq)) {
+      errors.push({
+        message: 'Aria snapshot must be a YAML sequence, elements starting with " -"',
+        range: yamlDoc.contents ? convertRange(yamlDoc.contents.range) : [{ line: 0, col: 0 }, { line: 0, col: 0 }]
+      });
+    }
+    if (errors.length)
+      return { errors, fragment };
+    convertSeq(fragment, yamlDoc.contents);
+    if (errors.length)
+      return { errors, fragment: emptyFragment };
+    if (fragment.children?.length === 1 && (!fragment.containerMode || fragment.containerMode === "contain"))
+      return { fragment: fragment.children[0], errors: [] };
+    return { fragment, errors: [] };
+  }
+  var emptyFragment = { kind: "role", role: "fragment" };
+  function normalizeWhitespace(text) {
+    return text.replace(/[\u200b\u00ad]/g, "").replace(/[\r\n\s\t]+/g, " ").trim();
+  }
+  function textValue(value) {
+    return {
+      raw: value,
+      normalized: normalizeWhitespace(value)
+    };
+  }
+
+  class KeyParser {
+    _input;
+    _pos;
+    _length;
+    static parse(text, options, errors) {
+      try {
+        return new KeyParser(text.value)._parse();
+      } catch (e) {
+        if (e instanceof ParserError) {
+          const message = options.prettyErrors === false ? e.message : e.message + `:
+
+` + text.value + `
+` + " ".repeat(e.pos) + `^
+`;
+          errors.push({
+            message,
+            range: [options.lineCounter.linePos(text.range[0]), options.lineCounter.linePos(text.range[0] + e.pos)]
+          });
+          return null;
+        }
+        throw e;
+      }
+    }
+    constructor(input) {
+      this._input = input;
+      this._pos = 0;
+      this._length = input.length;
+    }
+    _peek() {
+      return this._input[this._pos] || "";
+    }
+    _next() {
+      if (this._pos < this._length)
+        return this._input[this._pos++];
+      return null;
+    }
+    _eof() {
+      return this._pos >= this._length;
+    }
+    _isWhitespace() {
+      return !this._eof() && /\s/.test(this._peek());
+    }
+    _skipWhitespace() {
+      while (this._isWhitespace())
+        this._pos++;
+    }
+    _readIdentifier(type) {
+      if (this._eof())
+        this._throwError(`Unexpected end of input when expecting ${type}`);
+      const start = this._pos;
+      while (!this._eof() && /[a-zA-Z]/.test(this._peek()))
+        this._pos++;
+      return this._input.slice(start, this._pos);
+    }
+    _readString() {
+      let result = "";
+      let escaped = false;
+      while (!this._eof()) {
+        const ch = this._next();
+        if (escaped) {
+          result += ch;
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+        } else if (ch === '"') {
+          return result;
+        } else {
+          result += ch;
+        }
+      }
+      this._throwError("Unterminated string");
+    }
+    _throwError(message, offset = 0) {
+      throw new ParserError(message, offset || this._pos);
+    }
+    _readRegex() {
+      let result = "";
+      let escaped = false;
+      let insideClass = false;
+      while (!this._eof()) {
+        const ch = this._next();
+        if (escaped) {
+          result += ch;
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+          result += ch;
+        } else if (ch === "/" && !insideClass) {
+          return { pattern: result };
+        } else if (ch === "[") {
+          insideClass = true;
+          result += ch;
+        } else if (ch === "]" && insideClass) {
+          result += ch;
+          insideClass = false;
+        } else {
+          result += ch;
+        }
+      }
+      this._throwError("Unterminated regex");
+    }
+    _readStringOrRegex() {
+      const ch = this._peek();
+      if (ch === '"') {
+        this._next();
+        return normalizeWhitespace(this._readString());
+      }
+      if (ch === "/") {
+        this._next();
+        return this._readRegex();
+      }
+      return null;
+    }
+    _readAttributes(result) {
+      let errorPos = this._pos;
+      while (true) {
+        this._skipWhitespace();
+        if (this._peek() === "[") {
+          this._next();
+          this._skipWhitespace();
+          errorPos = this._pos;
+          const flagName = this._readIdentifier("attribute");
+          this._skipWhitespace();
+          let flagValue = "";
+          if (this._peek() === "=") {
+            this._next();
+            this._skipWhitespace();
+            errorPos = this._pos;
+            while (this._peek() !== "]" && !this._isWhitespace() && !this._eof())
+              flagValue += this._next();
+          }
+          this._skipWhitespace();
+          if (this._peek() !== "]")
+            this._throwError("Expected ]");
+          this._next();
+          this._applyAttribute(result, flagName, flagValue || "true", errorPos);
+        } else {
+          break;
+        }
+      }
+    }
+    _parse() {
+      this._skipWhitespace();
+      const role = this._readIdentifier("role");
+      this._skipWhitespace();
+      const name = this._readStringOrRegex() || "";
+      const result = { kind: "role", role, name };
+      this._readAttributes(result);
+      this._skipWhitespace();
+      if (!this._eof())
+        this._throwError("Unexpected input");
+      return result;
+    }
+    _applyAttribute(node, key, value, errorPos) {
+      if (key === "checked") {
+        this._assert(value === "true" || value === "false" || value === "mixed", 'Value of "checked" attribute must be a boolean or "mixed"', errorPos);
+        node.checked = value === "true" ? true : value === "false" ? false : "mixed";
+        return;
+      }
+      if (key === "disabled") {
+        this._assert(value === "true" || value === "false", 'Value of "disabled" attribute must be a boolean', errorPos);
+        node.disabled = value === "true";
+        return;
+      }
+      if (key === "expanded") {
+        this._assert(value === "true" || value === "false", 'Value of "expanded" attribute must be a boolean', errorPos);
+        node.expanded = value === "true";
+        return;
+      }
+      if (key === "active") {
+        this._assert(value === "true" || value === "false", 'Value of "active" attribute must be a boolean', errorPos);
+        node.active = value === "true";
+        return;
+      }
+      if (key === "invalid") {
+        this._assert(value === "true" || value === "false" || value === "grammar" || value === "spelling", 'Value of "invalid" attribute must be a boolean, "grammar" or "spelling"', errorPos);
+        node.invalid = value === "true" ? true : value === "false" ? false : value;
+        return;
+      }
+      if (key === "level") {
+        this._assert(!isNaN(Number(value)), 'Value of "level" attribute must be a number', errorPos);
+        node.level = Number(value);
+        return;
+      }
+      if (key === "pressed") {
+        this._assert(value === "true" || value === "false" || value === "mixed", 'Value of "pressed" attribute must be a boolean or "mixed"', errorPos);
+        node.pressed = value === "true" ? true : value === "false" ? false : "mixed";
+        return;
+      }
+      if (key === "selected") {
+        this._assert(value === "true" || value === "false", 'Value of "selected" attribute must be a boolean', errorPos);
+        node.selected = value === "true";
+        return;
+      }
+      this._assert(false, `Unsupported attribute [${key}]`, errorPos);
+    }
+    _assert(value, message, valuePos) {
+      if (!value)
+        this._throwError(message || "Assertion error", valuePos);
+    }
+  }
+
+  class ParserError extends Error {
+    pos;
+    constructor(message, pos) {
+      super(message);
+      this.pos = pos;
+    }
+  }
+
+  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/yaml.ts
+  function yamlEscapeKeyIfNeeded(str) {
+    if (!yamlStringNeedsQuotes(str))
+      return str;
+    return `'` + str.replace(/'/g, `''`) + `'`;
+  }
+  function yamlEscapeValueIfNeeded(str) {
+    if (!yamlStringNeedsQuotes(str))
+      return str;
+    return '"' + str.replace(/[\\"\x00-\x1f\x7f-\x9f]/g, (c) => {
+      switch (c) {
+        case "\\":
+          return "\\\\";
+        case '"':
+          return "\\\"";
+        case "\b":
+          return "\\b";
+        case "\f":
+          return "\\f";
+        case `
+`:
+          return "\\n";
+        case "\r":
+          return "\\r";
+        case "\t":
+          return "\\t";
+        default:
+          const code = c.charCodeAt(0);
+          return "\\x" + code.toString(16).padStart(2, "0");
+      }
+    }) + '"';
+  }
+  function yamlStringNeedsQuotes(str) {
+    if (str.length === 0)
+      return true;
+    if (/^\s|\s$/.test(str))
+      return true;
+    if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(str))
+      return true;
+    if (/^-/.test(str))
+      return true;
+    if (/[\n:](\s|$)/.test(str))
+      return true;
+    if (/\s#/.test(str))
+      return true;
+    if (/[\n\r]/.test(str))
+      return true;
+    if (/^[&*\],?!>|@"'#%]/.test(str))
+      return true;
+    if (/[{}`]/.test(str))
+      return true;
+    if (/^\[/.test(str))
+      return true;
+    if (!isNaN(Number(str)) || ["y", "n", "yes", "no", "true", "false", "on", "off", "null"].includes(str.toLowerCase()))
+      return true;
+    return false;
+  }
+
+  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/ariaSnapshotRenderer.ts
+  function renderAriaSnapshotAsYaml(snapshot, options = {}) {
+    const lines = [];
+    const includeText = options.convertStringsToRegex ? textContributesInfo : () => true;
+    const renderString = options.convertStringsToRegex ? convertToBestGuessRegex : (str) => str;
+    const visitText = (text, depth) => {
+      const escaped = yamlEscapeValueIfNeeded(renderString(text));
+      if (escaped)
+        lines.push(indent(depth) + "- text: " + escaped);
+    };
+    const createKey = (node) => {
+      let key = node.role;
+      if (node.name && node.name.length <= 900) {
+        const name = renderString(node.name);
+        if (name) {
+          const isRegex = options.convertStringsToRegex && name !== node.name;
+          key += " " + (isRegex ? name : JSON.stringify(name));
+        }
+      }
+      if (node.checked === "mixed")
+        key += ` [checked=mixed]`;
+      if (node.checked === true)
+        key += ` [checked]`;
+      if (node.disabled)
+        key += ` [disabled]`;
+      if (node.expanded)
+        key += ` [expanded]`;
+      if (node.active)
+        key += ` [active]`;
+      if (node.invalid === "grammar" || node.invalid === "spelling")
+        key += ` [invalid=${node.invalid}]`;
+      if (node.invalid === true)
+        key += ` [invalid]`;
+      if (node.level)
+        key += ` [level=${node.level}]`;
+      if (node.pressed === "mixed")
+        key += ` [pressed=mixed]`;
+      if (node.pressed === true)
+        key += ` [pressed]`;
+      if (node.selected === true)
+        key += ` [selected]`;
+      if (node.ariaHidden)
+        key += ` [aria-hidden]`;
+      if (node.ref) {
+        key += ` [ref=${node.ref}]`;
+        if (node.cursor === "pointer")
+          key += " [cursor=pointer]";
+      }
+      if (node.box)
+        key += ` [box=${node.box.x},${node.box.y},${node.box.width},${node.box.height}]`;
+      return key;
+    };
+    const visit = (node, depth) => {
+      if (node.role === "text") {
+        visitText(node.text || "", depth);
+        return;
+      }
+      options.lineToNode?.set(lines.length, node);
+      const escapedKey = indent(depth) + "- " + yamlEscapeKeyIfNeeded(createKey(node));
+      const props = [];
+      if (node.url !== undefined)
+        props.push(["url", node.url]);
+      if (node.placeholder !== undefined)
+        props.push(["placeholder", node.placeholder]);
+      if (node.text === undefined && !props.length && !node.children?.length) {
+        lines.push(escapedKey);
+      } else if (node.text !== undefined && !props.length) {
+        if (includeText(node, node.text))
+          lines.push(escapedKey + ": " + yamlEscapeValueIfNeeded(renderString(node.text)));
+        else
+          lines.push(escapedKey);
+      } else {
+        lines.push(escapedKey + ":");
+        for (const [name, value] of props)
+          lines.push(indent(depth + 1) + "- /" + name + ": " + yamlEscapeValueIfNeeded(value));
+        if (node.text !== undefined) {
+          visitText(includeText(node, node.text) ? node.text : "", depth + 1);
+        } else {
+          for (const child of node.children || []) {
+            if (typeof child === "string")
+              visitText(includeText(node, child) ? child : "", depth + 1);
+            else
+              visit(child, depth + 1);
+          }
+        }
+      }
+    };
+    for (const node of snapshot)
+      visit(node, 0);
+    return lines.join(`
+`);
+  }
+  function indent(depth) {
+    return "  ".repeat(depth);
+  }
+  function convertToBestGuessRegex(text) {
+    const dynamicContent = [
+      { regex: /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/, replacement: "[0-9a-fA-F-]+" },
+      { regex: /\b[\d,.]+[bkmBKM]+\b/, replacement: "[\\d,.]+[bkmBKM]+" },
+      { regex: /\b\d+[hmsp]+\b/, replacement: "\\d+[hmsp]+" },
+      { regex: /\b[\d,.]+[hmsp]+\b/, replacement: "[\\d,.]+[hmsp]+" },
+      { regex: /\b\d+,\d+\b/, replacement: "\\d+,\\d+" },
+      { regex: /\b\d+\.\d{2,}\b/, replacement: "\\d+\\.\\d+" },
+      { regex: /\b\d{2,}\.\d+\b/, replacement: "\\d+\\.\\d+" },
+      { regex: /\b\d{2,}\b/, replacement: "\\d+" }
+    ];
+    let pattern = "";
+    let lastIndex = 0;
+    const combinedRegex = new RegExp(dynamicContent.map((r) => "(" + r.regex.source + ")").join("|"), "g");
+    text.replace(combinedRegex, (match, ...args) => {
+      const offset = args[args.length - 2];
+      const groups = args.slice(0, -2);
+      pattern += escapeRegExp(text.slice(lastIndex, offset));
+      for (let i = 0;i < groups.length; i++) {
+        if (groups[i]) {
+          const { replacement } = dynamicContent[i];
+          pattern += replacement;
+          break;
+        }
+      }
+      lastIndex = offset + match.length;
+      return match;
+    });
+    if (!pattern)
+      return text;
+    pattern += escapeRegExp(text.slice(lastIndex));
+    return String(new RegExp(pattern));
+  }
+  function textContributesInfo(node, text) {
+    if (!text.length)
+      return false;
+    if (!node.name)
+      return true;
+    const substr = text.length <= 200 && node.name.length <= 200 ? longestCommonSubstring(text, node.name) : "";
+    let filtered = text;
+    while (substr && filtered.includes(substr))
+      filtered = filtered.replace(substr, "");
+    return filtered.trim().length / text.length > 0.1;
+  }
+
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/isomorphic/locatorUtils.ts
   function splitTestIdAttributeNames(testIdAttributeName) {
     return testIdAttributeName.split(",");
   }
 
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/ariaSnapshotDistiller.ts
-  function distillAriaSnapshot(snapshot, options) {
-    runPlugins(snapshot, options.mode === "ai" ? aiPlugins : normalizePlugins, options);
+  // crates/neo-sdk/neo-playwright-js/src/stubs/ariaSnapshot.ts
+  function unsupportedInPage2(name) {
+    throw new Error(`${name}: ARIA snapshots and template matching run in Rust, not in the page`);
   }
-  function runPlugins(snapshot, plugins, options) {
-    const ctx = { snapshot, depth: -1, maxDepth: options.depth, ancestors: [], pendingContentRefs: new Set };
-    const traverse = (node, depth) => {
-      const children = [];
-      const visitChild = (child) => {
-        if (typeof child === "string") {
-          children.push(child);
-          return;
-        }
-        ctx.depth = depth + 1;
-        for (const plugin of plugins) {
-          const result = plugin.enter?.(child, ctx);
-          if (result === "remove")
-            return;
-          if (result === "unwrap") {
-            child.children.forEach(visitChild);
-            return;
-          }
-        }
-        traverse(child, depth + 1);
-        ctx.depth = depth + 1;
-        for (const plugin of plugins) {
-          const result = plugin.exit?.(child, ctx);
-          if (result === "remove")
-            return;
-          if (result === "unwrap") {
-            children.push(...child.children);
-            return;
-          }
-        }
-        children.push(child);
-      };
-      ctx.ancestors.push(node);
-      node.children.forEach(visitChild);
-      ctx.ancestors.pop();
-      node.children = children;
-    };
-    for (const plugin of plugins)
-      plugin.enter?.(snapshot.root, ctx);
-    traverse(snapshot.root, -1);
-    ctx.depth = -1;
-    for (const plugin of plugins)
-      plugin.exit?.(snapshot.root, ctx);
+  function generateAriaTree(_rootElement, _publicOptions) {
+    return unsupportedInPage2("generateAriaTree");
   }
-  function isLeafGeneric(node) {
-    return node.role === "generic" && node.children.every((child) => typeof child === "string");
+  function matchesExpectAriaTemplate(_rootElement, _template) {
+    return unsupportedInPage2("matchesExpectAriaTemplate");
   }
-  function isClickTargetRoot(node, ctx) {
-    return !!node.ref && hasPointerCursor(node) && !ctx.ancestors.some((ancestor) => !!ancestor.ref && hasPointerCursor(ancestor));
+  function getAllElementsMatchingExpectAriaTemplate(_rootElement, _template) {
+    return unsupportedInPage2("getAllElementsMatchingExpectAriaTemplate");
   }
-  var mergeStringChildren = {
-    name: "mergeStringChildren",
-    exit(node) {
-      const children = [];
-      const buffer = [];
-      const flush = () => {
-        if (!buffer.length)
-          return;
-        const text = normalizeWhiteSpace(buffer.join(""));
-        if (text)
-          children.push(text);
-        buffer.length = 0;
-      };
-      for (const child of node.children) {
-        if (typeof child === "string") {
-          buffer.push(child);
-        } else {
-          flush();
-          children.push(child);
-        }
-      }
-      flush();
-      node.children = children;
-      if (node.children.length === 1 && node.children[0] === node.name)
-        node.children = [];
-    }
-  };
-  var unwrapSingleChildGenerics = {
-    name: "unwrapSingleChildGenerics",
-    exit(node, ctx) {
-      if (node.role !== "generic" || node.name || node.children.length > 1 || !node.children.every((child) => typeof child !== "string" && !!child.ref))
-        return;
-      if (!node.children.length && isClickTargetRoot(node, ctx))
-        return;
-      return "unwrap";
-    }
-  };
-  var removeNamelessImages = {
-    name: "removeNamelessImages",
-    exit(node, ctx) {
-      if (node.role === "img" && !node.name && !node.children.length && !isClickTargetRoot(node, ctx))
-        return "remove";
-    }
-  };
-  var removeRedundantNames = {
-    name: "removeRedundantNames",
-    enter(node, ctx) {
-      if (!node.ref)
-        return;
-      for (const ref of ctx.snapshot.info.get(node.ref)?.nameFromContentRefs || [])
-        ctx.pendingContentRefs.add(ref);
-      const beyondDepth = !!ctx.maxDepth && ctx.depth > ctx.maxDepth;
-      if (!beyondDepth && !isLeafGeneric(node))
-        ctx.pendingContentRefs.delete(node.ref);
-    },
-    exit(node, ctx) {
-      if (!node.ref)
-        return;
-      const nameFromContentRefs = ctx.snapshot.info.get(node.ref)?.nameFromContentRefs;
-      if (!nameFromContentRefs?.length)
-        return;
-      if (nameFromContentRefs.every((ref) => !ctx.pendingContentRefs.has(ref))) {
-        node.name = "";
-      } else {
-        for (const ref of nameFromContentRefs)
-          ctx.pendingContentRefs.delete(ref);
-      }
-    }
-  };
-  var removeNameRepeatingChild = {
-    name: "removeNameRepeatingChild",
-    exit(node, ctx) {
-      const parent = ctx.ancestors[ctx.ancestors.length - 1];
-      if (!parent?.name || node.role !== "generic" || node.active || Object.keys(node.props).length)
-        return;
-      const singleTextChild = node.children.length === 1 && typeof node.children[0] === "string" ? node.children[0] : undefined;
-      const text = node.name ? node.children.length ? undefined : node.name : singleTextChild;
-      if (text && text === parent.name) {
-        if (node.ref)
-          ctx.pendingContentRefs.add(node.ref);
-        return "remove";
-      }
-    }
-  };
-  var inlineTextIntoGeneric = {
-    name: "inlineTextIntoGeneric",
-    exit(node) {
-      if (node.role !== "generic" || Object.keys(node.props).length || node.children.length !== 1)
-        return;
-      const child = node.children[0];
-      if (typeof child === "string")
-        return;
-      if (child.role !== "generic" || child.name || child.active || Object.keys(child.props).length)
-        return;
-      if (child.children.length === 1 && typeof child.children[0] === "string")
-        node.children = [child.children[0]];
-    }
-  };
-  var normalizePlugins = [
-    mergeStringChildren,
-    unwrapSingleChildGenerics
-  ];
-  var aiPlugins = [
-    mergeStringChildren,
-    removeNamelessImages,
-    removeRedundantNames,
-    inlineTextIntoGeneric,
-    removeNameRepeatingChild,
-    unwrapSingleChildGenerics
-  ];
-
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/domUtils.ts
-  var globalOptions = {};
-  function setGlobalOptions(options) {
-    globalOptions = options;
+  function renderAriaTreeAsJSON(_ariaSnapshot, _publicOptions) {
+    return unsupportedInPage2("renderAriaTreeAsJSON");
   }
-  function isInsideScope(scope, element) {
-    while (element) {
-      if (scope.contains(element))
-        return true;
-      element = enclosingShadowHost(element);
-    }
-    return false;
-  }
-  function parentElementOrShadowHost(element) {
-    if (element.parentElement)
-      return element.parentElement;
-    if (!element.parentNode)
-      return;
-    if (element.parentNode.nodeType === 11 && element.parentNode.host)
-      return element.parentNode.host;
-  }
-  function enclosingShadowRootOrDocument(element) {
-    let node = element;
-    while (node.parentNode)
-      node = node.parentNode;
-    if (node.nodeType === 11 || node.nodeType === 9)
-      return node;
-  }
-  function enclosingShadowHost(element) {
-    while (element.parentElement)
-      element = element.parentElement;
-    return parentElementOrShadowHost(element);
-  }
-  function closestCrossShadow(element, css, scope) {
-    while (element) {
-      const closest = element.closest(css);
-      if (scope && closest !== scope && closest?.contains(scope))
-        return;
-      if (closest)
-        return closest;
-      element = enclosingShadowHost(element);
-    }
-  }
-  function getElementComputedStyle(element, pseudo) {
-    const cache = pseudo === "::before" ? cacheStyleBefore : pseudo === "::after" ? cacheStyleAfter : cacheStyle;
-    if (cache && cache.has(element))
-      return cache.get(element);
-    const style = element.ownerDocument && element.ownerDocument.defaultView ? element.ownerDocument.defaultView.getComputedStyle(element, pseudo) : undefined;
-    cache?.set(element, style);
-    return style;
-  }
-  function isElementStyleVisibilityVisible(element, style) {
-    const cached = cacheStyleVisibility?.get(element);
-    if (cached !== undefined)
-      return cached;
-    const result = computeElementStyleVisibilityVisible(element, style);
-    cacheStyleVisibility?.set(element, result);
-    return result;
-  }
-  function computeElementStyleVisibilityVisible(element, style) {
-    style = style ?? getElementComputedStyle(element);
-    if (!style)
-      return true;
-    if (!element.checkVisibility() && !isWebKitListBoxOptionVisible(element, style))
-      return false;
-    if (style.visibility !== "visible")
-      return false;
-    return true;
-  }
-  function isListBoxSelect(select) {
-    return select.multiple || select.size > 1;
-  }
-  function isWebKitListBoxOptionVisible(element, style) {
-    if (globalOptions.browserNameForWorkarounds !== "webkit" || element.nodeName !== "OPTION" || style.display === "none")
-      return false;
-    const select = element.closest("select");
-    if (!select || !isListBoxSelect(select))
-      return false;
-    for (let e = element.parentElement;e && e !== select; e = e.parentElement) {
-      if (getElementComputedStyle(e)?.display === "none")
-        return false;
-    }
-    return isElementStyleVisibilityVisible(select);
-  }
-  function computeBox(element) {
-    const style = getElementComputedStyle(element);
-    if (!style)
-      return { visible: true, inline: false };
-    const cursor = style.cursor;
-    if (style.display === "contents") {
-      for (let child = element.firstChild;child; child = child.nextSibling) {
-        if (child.nodeType === 1 && isElementVisible(child))
-          return { visible: true, inline: false, cursor };
-        if (child.nodeType === 3 && isVisibleTextNode(child))
-          return { visible: true, inline: true, cursor };
-      }
-      return { visible: false, inline: false, cursor };
-    }
-    if (!isElementStyleVisibilityVisible(element, style))
-      return { cursor, visible: false, inline: false };
-    const rect = element.getBoundingClientRect();
-    return { cursor, visible: rect.width > 0 && rect.height > 0, inline: style.display === "inline" };
-  }
-  function isElementVisible(element) {
-    return computeBox(element).visible;
-  }
-  var kTextNodeRange = Symbol("playwrightTextNodeRange");
-  function isVisibleTextNode(node) {
-    const document2 = node.ownerDocument;
-    const range = document2[kTextNodeRange] ??= document2.createRange();
-    range.selectNode(node);
-    const rect = range.getBoundingClientRect();
-    const result = rect.width > 0 && rect.height > 0;
-    range.setStart(document2, 0);
-    range.collapse(true);
-    return result;
-  }
-  function elementSafeTagName(element) {
-    const tagName = element.tagName;
-    if (typeof tagName === "string") {
-      const firstCharCode = tagName.charCodeAt(0);
-      if (firstCharCode >= 97 && firstCharCode <= 122)
-        return tagName.toUpperCase();
-      return tagName;
-    }
-    if (element instanceof HTMLFormElement)
-      return "FORM";
-    return element.tagName.toUpperCase();
-  }
-  var cacheStyle;
-  var cacheStyleBefore;
-  var cacheStyleAfter;
-  var cacheStyleVisibility;
-  var cachesCounter = 0;
-  function beginDOMCaches() {
-    ++cachesCounter;
-    cacheStyle ??= new Map;
-    cacheStyleBefore ??= new Map;
-    cacheStyleAfter ??= new Map;
-    cacheStyleVisibility ??= new Map;
-  }
-  function endDOMCaches() {
-    if (!--cachesCounter) {
-      cacheStyle = undefined;
-      cacheStyleBefore = undefined;
-      cacheStyleAfter = undefined;
-      cacheStyleVisibility = undefined;
-    }
-  }
-
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/roleUtils.ts
-  function hasExplicitAccessibleName(e) {
-    return e.hasAttribute("aria-label") || e.hasAttribute("aria-labelledby");
-  }
-  var kAncestorPreventingLandmark = "article:not([role]), aside:not([role]), main:not([role]), nav:not([role]), section:not([role]), [role=article], [role=complementary], [role=main], [role=navigation], [role=region]";
-  var kGlobalAriaAttributes = [
-    ["aria-atomic", undefined],
-    ["aria-busy", undefined],
-    ["aria-controls", undefined],
-    ["aria-current", undefined],
-    ["aria-describedby", undefined],
-    ["aria-details", undefined],
-    ["aria-dropeffect", undefined],
-    ["aria-flowto", undefined],
-    ["aria-grabbed", undefined],
-    ["aria-hidden", undefined],
-    ["aria-keyshortcuts", undefined],
-    ["aria-label", ["caption", "code", "deletion", "emphasis", "generic", "insertion", "paragraph", "presentation", "strong", "subscript", "superscript"]],
-    ["aria-labelledby", ["caption", "code", "deletion", "emphasis", "generic", "insertion", "paragraph", "presentation", "strong", "subscript", "superscript"]],
-    ["aria-live", undefined],
-    ["aria-owns", undefined],
-    ["aria-relevant", undefined],
-    ["aria-roledescription", ["generic"]]
-  ];
-  function hasGlobalAriaAttribute(element, forRole) {
-    return kGlobalAriaAttributes.some(([attr, prohibited]) => {
-      return !prohibited?.includes(forRole || "") && element.hasAttribute(attr);
-    });
-  }
-  function hasTabIndex(element) {
-    return !Number.isNaN(Number(String(element.getAttribute("tabindex"))));
-  }
-  function isFocusable(element) {
-    return !isNativelyDisabled(element) && (isNativelyFocusable(element) || hasTabIndex(element));
-  }
-  function isNativelyFocusable(element) {
-    const tagName = elementSafeTagName(element);
-    if (["BUTTON", "DETAILS", "SELECT", "TEXTAREA"].includes(tagName))
-      return true;
-    if (tagName === "A" || tagName === "AREA")
-      return element.hasAttribute("href");
-    if (tagName === "INPUT")
-      return !element.hidden;
-    return false;
-  }
-  var kImplicitRoleByTagName = {
-    A: (e) => {
-      return e.hasAttribute("href") ? "link" : null;
-    },
-    AREA: (e) => {
-      return e.hasAttribute("href") ? "link" : null;
-    },
-    ARTICLE: () => "article",
-    ASIDE: () => "complementary",
-    BLOCKQUOTE: () => "blockquote",
-    BUTTON: () => "button",
-    CAPTION: () => "caption",
-    CODE: () => "code",
-    DATALIST: () => "listbox",
-    DD: () => "definition",
-    DEL: () => "deletion",
-    DETAILS: () => "group",
-    DFN: () => "term",
-    DIALOG: () => "dialog",
-    DT: () => "term",
-    EM: () => "emphasis",
-    FIELDSET: () => "group",
-    FIGURE: () => "figure",
-    FOOTER: (e) => closestCrossShadow(e, kAncestorPreventingLandmark) ? null : "contentinfo",
-    FORM: (e) => hasExplicitAccessibleName(e) ? "form" : null,
-    H1: () => "heading",
-    H2: () => "heading",
-    H3: () => "heading",
-    H4: () => "heading",
-    H5: () => "heading",
-    H6: () => "heading",
-    HEADER: (e) => closestCrossShadow(e, kAncestorPreventingLandmark) ? null : "banner",
-    HR: () => "separator",
-    HTML: () => "document",
-    IMG: (e) => e.getAttribute("alt") === "" && !e.getAttribute("title") && !hasGlobalAriaAttribute(e) && !hasTabIndex(e) ? "presentation" : "img",
-    INPUT: (e) => {
-      const type = e.type.toLowerCase();
-      if (["email", "search", "tel", "text", "url", ""].includes(type)) {
-        const list = getIdRefs(e, e.getAttribute("list"))[0];
-        if (list && elementSafeTagName(list) === "DATALIST")
-          return "combobox";
-        return type === "search" ? "searchbox" : "textbox";
-      }
-      if (type === "hidden")
-        return null;
-      if (type === "file")
-        return "button";
-      return inputTypeToRole[type] || "textbox";
-    },
-    INS: () => "insertion",
-    LI: () => "listitem",
-    MAIN: () => "main",
-    MARK: () => "mark",
-    MATH: () => "math",
-    MENU: () => "list",
-    METER: () => "meter",
-    NAV: () => "navigation",
-    OL: () => "list",
-    OPTGROUP: () => "group",
-    OPTION: () => "option",
-    OUTPUT: () => "status",
-    P: () => "paragraph",
-    PROGRESS: () => "progressbar",
-    SEARCH: () => "search",
-    SECTION: (e) => hasExplicitAccessibleName(e) ? "region" : null,
-    SELECT: (e) => isListBoxSelect(e) ? "listbox" : "combobox",
-    STRONG: () => "strong",
-    SUB: () => "subscript",
-    SUP: () => "superscript",
-    SVG: () => "img",
-    TABLE: () => "table",
-    TBODY: () => "rowgroup",
-    TD: (e) => {
-      const table = closestCrossShadow(e, "table");
-      const role = table ? getExplicitAriaRole(table) : "";
-      return role === "grid" || role === "treegrid" ? "gridcell" : "cell";
-    },
-    TEXTAREA: () => "textbox",
-    TFOOT: () => "rowgroup",
-    TH: (e) => {
-      const scope = e.getAttribute("scope");
-      if (scope === "col" || scope === "colgroup")
-        return "columnheader";
-      if (scope === "row" || scope === "rowgroup")
-        return "rowheader";
-      const nextSibling = e.nextElementSibling;
-      const prevSibling = e.previousElementSibling;
-      const row = !!e.parentElement && elementSafeTagName(e.parentElement) === "TR" ? e.parentElement : undefined;
-      if (!nextSibling && !prevSibling) {
-        if (row) {
-          const table = closestCrossShadow(row, "table");
-          if (table && table.rows.length <= 1)
-            return null;
-        }
-        return "columnheader";
-      }
-      if (isHeaderCell(nextSibling) && isHeaderCell(prevSibling))
-        return "columnheader";
-      if (isNonEmptyDataCell(nextSibling) || isNonEmptyDataCell(prevSibling))
-        return "rowheader";
-      return "columnheader";
-    },
-    THEAD: () => "rowgroup",
-    TIME: () => "time",
-    TR: () => "row",
-    UL: () => "list"
-  };
-  function isHeaderCell(element) {
-    return !!element && elementSafeTagName(element) === "TH";
-  }
-  function isNonEmptyDataCell(element) {
-    if (!element || elementSafeTagName(element) !== "TD")
-      return false;
-    return !!(element.textContent?.trim() || element.children.length > 0);
-  }
-  var kPresentationInheritanceParents = {
-    DD: ["DL", "DIV"],
-    DIV: ["DL"],
-    DT: ["DL", "DIV"],
-    LI: ["OL", "UL"],
-    TBODY: ["TABLE"],
-    TD: ["TR"],
-    TFOOT: ["TABLE"],
-    TH: ["TR"],
-    THEAD: ["TABLE"],
-    TR: ["THEAD", "TBODY", "TFOOT", "TABLE"]
-  };
-  function getImplicitAriaRole(element) {
-    const implicitRole = kImplicitRoleByTagName[elementSafeTagName(element)]?.(element) || "";
-    if (!implicitRole)
-      return null;
-    let ancestor = element;
-    while (ancestor) {
-      const parent = parentElementOrShadowHost(ancestor);
-      const parents = kPresentationInheritanceParents[elementSafeTagName(ancestor)];
-      if (!parents || !parent || !parents.includes(elementSafeTagName(parent)))
-        break;
-      const parentExplicitRole = getExplicitAriaRole(parent);
-      if ((parentExplicitRole === "none" || parentExplicitRole === "presentation") && !hasPresentationConflictResolution(parent, parentExplicitRole))
-        return parentExplicitRole;
-      ancestor = parent;
-    }
-    return implicitRole;
-  }
-  var validRoles = [
-    "alert",
-    "alertdialog",
-    "application",
-    "article",
-    "banner",
-    "blockquote",
-    "button",
-    "caption",
-    "cell",
-    "checkbox",
-    "code",
-    "columnheader",
-    "combobox",
-    "complementary",
-    "contentinfo",
-    "definition",
-    "deletion",
-    "dialog",
-    "directory",
-    "document",
-    "emphasis",
-    "feed",
-    "figure",
-    "form",
-    "generic",
-    "grid",
-    "gridcell",
-    "group",
-    "heading",
-    "img",
-    "insertion",
-    "link",
-    "list",
-    "listbox",
-    "listitem",
-    "log",
-    "main",
-    "mark",
-    "marquee",
-    "math",
-    "meter",
-    "menu",
-    "menubar",
-    "menuitem",
-    "menuitemcheckbox",
-    "menuitemradio",
-    "navigation",
-    "none",
-    "note",
-    "option",
-    "paragraph",
-    "presentation",
-    "progressbar",
-    "radio",
-    "radiogroup",
-    "region",
-    "row",
-    "rowgroup",
-    "rowheader",
-    "scrollbar",
-    "search",
-    "searchbox",
-    "separator",
-    "slider",
-    "spinbutton",
-    "status",
-    "strong",
-    "subscript",
-    "superscript",
-    "switch",
-    "tab",
-    "table",
-    "tablist",
-    "tabpanel",
-    "term",
-    "textbox",
-    "time",
-    "timer",
-    "toolbar",
-    "tooltip",
-    "tree",
-    "treegrid",
-    "treeitem"
-  ];
-  function getExplicitAriaRole(element) {
-    const roles = (element.getAttribute("role") || "").split(" ").map((role) => role.trim());
-    return roles.find((role) => validRoles.includes(role)) || null;
-  }
-  function hasPresentationConflictResolution(element, role) {
-    return hasGlobalAriaAttribute(element, role) || isFocusable(element);
-  }
-  function getAriaRole(element) {
-    const cached = cacheAriaRole?.get(element);
-    if (cached !== undefined)
-      return cached;
-    const role = computeAriaRole(element);
-    cacheAriaRole?.set(element, role);
-    return role;
-  }
-  function computeAriaRole(element) {
-    const explicitRole = getExplicitAriaRole(element);
-    if (!explicitRole)
-      return getImplicitAriaRole(element);
-    if (explicitRole === "none" || explicitRole === "presentation") {
-      const implicitRole = getImplicitAriaRole(element);
-      if (hasPresentationConflictResolution(element, implicitRole))
-        return implicitRole;
-    }
-    return explicitRole;
-  }
-  function getAriaBoolean(attr) {
-    return attr === null ? undefined : attr.toLowerCase() === "true";
-  }
-  function isElementIgnoredForAria(element) {
-    return ["STYLE", "SCRIPT", "NOSCRIPT", "TEMPLATE"].includes(elementSafeTagName(element));
-  }
-  function isElementHiddenForAria(element) {
-    if (isElementIgnoredForAria(element))
-      return true;
-    const style = getElementComputedStyle(element);
-    const isSlot = element.nodeName === "SLOT";
-    if (style?.display === "contents" && !isSlot) {
-      for (let child = element.firstChild;child; child = child.nextSibling) {
-        if (child.nodeType === 1 && !isElementHiddenForAria(child))
-          return false;
-        if (child.nodeType === 3 && isVisibleTextNode(child))
-          return false;
-      }
-      return true;
-    }
-    const isOptionInsideSelect = element.nodeName === "OPTION" && !!element.closest("select");
-    if (!isOptionInsideSelect && !isSlot && !isElementStyleVisibilityVisible(element, style))
-      return true;
-    return belongsToDisplayNoneOrAriaHiddenOrNonSlotted(element);
-  }
-  function belongsToDisplayNoneOrAriaHiddenOrNonSlotted(element) {
-    let hidden = cacheIsHidden?.get(element);
-    if (hidden === undefined) {
-      hidden = false;
-      if (element.parentElement && element.parentElement.shadowRoot && !element.assignedSlot)
-        hidden = true;
-      if (!hidden) {
-        const style = getElementComputedStyle(element);
-        hidden = !style || style.display === "none" || getAriaBoolean(element.getAttribute("aria-hidden")) === true;
-      }
-      if (!hidden) {
-        const parent = parentElementOrShadowHost(element);
-        if (parent)
-          hidden = belongsToDisplayNoneOrAriaHiddenOrNonSlotted(parent);
-      }
-      cacheIsHidden?.set(element, hidden);
-    }
-    return hidden;
-  }
-  function getIdRefs(element, ref) {
-    if (!ref)
-      return [];
-    const root = enclosingShadowRootOrDocument(element);
-    if (!root)
-      return [];
-    try {
-      const ids = ref.split(" ").filter((id) => !!id);
-      const result = [];
-      for (const id of ids) {
-        const firstElement = root.querySelector("#" + CSS.escape(id));
-        if (firstElement && !result.includes(firstElement))
-          result.push(firstElement);
-      }
-      return result;
-    } catch (e) {
-      return [];
-    }
-  }
-  function trimFlatString(s) {
-    return s.trim();
-  }
-  function asFlatString(s) {
-    return s.split(" ").map((chunk) => chunk.replace(/\r\n/g, `
-`).replace(/[\u200b\u00ad]/g, "").replace(/\s\s*/g, " ")).join(" ").trim();
-  }
-  function queryInAriaOwned(element, selector) {
-    const result = [...element.querySelectorAll(selector)];
-    for (const owned of getIdRefs(element, element.getAttribute("aria-owns"))) {
-      if (owned.matches(selector))
-        result.push(owned);
-      result.push(...owned.querySelectorAll(selector));
-    }
-    return result;
-  }
-  function getCSSContent(element, pseudo) {
-    const cache = pseudo === "::before" ? cachePseudoContentBefore : pseudo === "::after" ? cachePseudoContentAfter : cachePseudoContent;
-    if (cache?.has(element))
-      return cache?.get(element);
-    const style = getElementComputedStyle(element, pseudo);
-    let content;
-    if (style) {
-      const contentValue = style.content;
-      if (contentValue && contentValue !== "none" && contentValue !== "normal") {
-        if (style.display !== "none" && style.visibility !== "hidden") {
-          content = parseCSSContentPropertyAsString(element, contentValue, !!pseudo);
-        }
-      }
-    }
-    if (pseudo && content !== undefined) {
-      const display = style?.display || "inline";
-      if (display !== "inline")
-        content = " " + content + " ";
-    }
-    if (cache)
-      cache.set(element, content);
-    return content;
-  }
-  function parseCSSContentPropertyAsString(element, content, isPseudo) {
-    if (!content || content === "none" || content === "normal") {
-      return;
-    }
-    try {
-      let tokens = tokenize(content).filter((token) => !(token instanceof WhitespaceToken));
-      const delimIndex = tokens.findIndex((token) => token instanceof DelimToken && token.value === "/");
-      if (delimIndex !== -1) {
-        tokens = tokens.slice(delimIndex + 1);
-      } else if (!isPseudo) {
-        return;
-      }
-      const accumulated = [];
-      let index = 0;
-      while (index < tokens.length) {
-        if (tokens[index] instanceof StringToken) {
-          accumulated.push(tokens[index].value);
-          index++;
-        } else if (index + 2 < tokens.length && tokens[index] instanceof FunctionToken && tokens[index].value === "attr" && tokens[index + 1] instanceof IdentToken && tokens[index + 2] instanceof CloseParenToken) {
-          const attrName = tokens[index + 1].value;
-          accumulated.push(element.getAttribute(attrName) || "");
-          index += 3;
-        } else {
-          return;
-        }
-      }
-      return accumulated.join("");
-    } catch {}
-  }
-  function getAriaLabelledByElements(element) {
-    const ref = element.getAttribute("aria-labelledby");
-    if (ref === null)
-      return null;
-    const refs = getIdRefs(element, ref);
-    return refs.length ? refs : null;
-  }
-  function allowsNameFromContent(role, targetDescendant) {
-    const alwaysAllowsNameFromContent = ["button", "cell", "checkbox", "columnheader", "gridcell", "heading", "link", "menuitem", "menuitemcheckbox", "menuitemradio", "option", "radio", "row", "rowheader", "switch", "tab", "tooltip", "treeitem"].includes(role);
-    const descendantAllowsNameFromContent = targetDescendant && ["", "caption", "code", "contentinfo", "definition", "deletion", "emphasis", "insertion", "list", "listitem", "mark", "none", "paragraph", "presentation", "region", "row", "rowgroup", "section", "strong", "subscript", "superscript", "table", "term", "time"].includes(role);
-    return alwaysAllowsNameFromContent || descendantAllowsNameFromContent;
-  }
-  function computeAccessibleNameComposite(element, includeHidden, collectElements) {
-    const elementProhibitsNaming = ["caption", "code", "definition", "deletion", "emphasis", "generic", "insertion", "mark", "paragraph", "presentation", "strong", "subscript", "suggestion", "superscript", "term", "time"].includes(getAriaRole(element) || "");
-    if (elementProhibitsNaming)
-      return { ...emptyCompositeString(), derivedFromContent: false };
-    const outDerivedFromContent = { value: false };
-    const result = getTextAlternativeInternal(element, {
-      includeHidden,
-      collectElements,
-      outDerivedFromContent,
-      visitedElements: new Set,
-      embeddedInTargetElement: "self"
-    });
-    return { text: asFlatString(result.text), elements: result.elements, derivedFromContent: outDerivedFromContent.value };
-  }
-  function getElementAccessibleName(element, includeHidden) {
-    const cache = includeHidden ? cacheAccessibleNameHidden : cacheAccessibleName;
-    let accessibleName = cache?.get(element);
-    if (accessibleName === undefined) {
-      accessibleName = computeAccessibleNameComposite(element, includeHidden, true);
-      cache?.set(element, accessibleName);
-    }
-    return accessibleName;
-  }
-  function getElementAccessibleNameText(element, includeHidden) {
-    const composite = (includeHidden ? cacheAccessibleNameHidden : cacheAccessibleName)?.get(element);
-    if (composite !== undefined)
-      return composite.text;
-    const cache = includeHidden ? cacheAccessibleNameTextHidden : cacheAccessibleNameText;
-    let text = cache?.get(element);
-    if (text === undefined) {
-      text = computeAccessibleNameComposite(element, includeHidden, false).text;
-      cache?.set(element, text);
-    }
-    return text;
-  }
-  function getElementAccessibleDescription(element, includeHidden) {
-    const cache = includeHidden ? cacheAccessibleDescriptionHidden : cacheAccessibleDescription;
-    let accessibleDescription = cache?.get(element);
-    if (accessibleDescription === undefined) {
-      accessibleDescription = { text: "", derivedFromContent: false };
-      if (element.hasAttribute("aria-describedby")) {
-        const describedBy = getIdRefs(element, element.getAttribute("aria-describedby"));
-        accessibleDescription.text = asFlatString(describedBy.map((ref) => getTextAlternativeInternal(ref, {
-          includeHidden,
-          visitedElements: new Set,
-          embeddedInDescribedBy: { element: ref, hidden: isElementHiddenForAria(ref) }
-        }).text).join(" "));
-        accessibleDescription.derivedFromContent = describedBy.some((ref) => ref === element || element.contains(ref));
-      } else if (element.hasAttribute("aria-description")) {
-        accessibleDescription.text = asFlatString(element.getAttribute("aria-description") || "");
-      } else {
-        accessibleDescription.text = asFlatString(element.getAttribute("title") || "");
-      }
-      cache?.set(element, accessibleDescription);
-    }
-    return accessibleDescription;
-  }
-  var kAriaInvalidRoles = [
-    "application",
-    "checkbox",
-    "columnheader",
-    "combobox",
-    "gridcell",
-    "listbox",
-    "radiogroup",
-    "rowheader",
-    "searchbox",
-    "slider",
-    "spinbutton",
-    "switch",
-    "textbox",
-    "tree"
-  ];
-  function getAriaInvalid(element) {
-    const ariaInvalid = element.getAttribute("aria-invalid");
-    if (!ariaInvalid || ariaInvalid.trim() === "" || ariaInvalid.toLocaleLowerCase() === "false")
-      return "false";
-    if (ariaInvalid === "true" || ariaInvalid === "grammar" || ariaInvalid === "spelling")
-      return ariaInvalid;
-    return "true";
-  }
-  function getValidityInvalid(element) {
-    if ("validity" in element) {
-      const validity = element.validity;
-      return validity?.valid === false;
-    }
-    return false;
-  }
-  function getElementAccessibleErrorMessage(element) {
-    const cache = cacheAccessibleErrorMessage;
-    let accessibleErrorMessage = cacheAccessibleErrorMessage?.get(element);
-    if (accessibleErrorMessage === undefined) {
-      accessibleErrorMessage = "";
-      const isAriaInvalid = getAriaInvalid(element) !== "false";
-      const isValidityInvalid = getValidityInvalid(element);
-      if (isAriaInvalid || isValidityInvalid) {
-        const errorMessageId = element.getAttribute("aria-errormessage");
-        const errorMessages = getIdRefs(element, errorMessageId);
-        const parts = errorMessages.map((errorMessage) => asFlatString(getTextAlternativeInternal(errorMessage, {
-          visitedElements: new Set,
-          embeddedInDescribedBy: { element: errorMessage, hidden: isElementHiddenForAria(errorMessage) }
-        }).text));
-        accessibleErrorMessage = parts.join(" ").trim();
-      }
-      cache?.set(element, accessibleErrorMessage);
-    }
-    return accessibleErrorMessage;
-  }
-  function insideTargetElement(options) {
-    return options.embeddedInTargetElement === "self" || options.embeddedInTargetElement === "descendant";
-  }
-  function getTextAlternativeInternal(element, options) {
-    if (options.visitedElements.has(element))
-      return emptyCompositeString();
-    const childOptions = {
-      ...options,
-      embeddedInTargetElement: options.embeddedInTargetElement === "self" ? "descendant" : options.embeddedInTargetElement
-    };
-    if (!options.includeHidden) {
-      const isEmbeddedInHiddenReferenceTraversal = !!options.embeddedInLabelledBy?.hidden || !!options.embeddedInDescribedBy?.hidden || !!options.embeddedInNativeTextAlternative?.hidden || !!options.embeddedInLabel?.hidden;
-      if (isElementIgnoredForAria(element) || !isEmbeddedInHiddenReferenceTraversal && isElementHiddenForAria(element)) {
-        options.visitedElements.add(element);
-        return emptyCompositeString();
-      }
-    }
-    const labelledBy = getAriaLabelledByElements(element);
-    if (!options.embeddedInLabelledBy) {
-      const accessibleName = joinCompositeString((labelledBy || []).map((ref) => getTextAlternativeInternal(ref, {
-        ...options,
-        embeddedInLabelledBy: { element: ref, hidden: isElementHiddenForAria(ref) },
-        embeddedInDescribedBy: undefined,
-        embeddedInTargetElement: undefined,
-        embeddedInLabel: undefined,
-        embeddedInNativeTextAlternative: undefined
-      })), " ", options.collectElements);
-      if (accessibleName.text) {
-        if (options.outDerivedFromContent && insideTargetElement(options) && (labelledBy || []).some((ref) => ref === element || element.contains(ref)))
-          options.outDerivedFromContent.value = true;
-        return accessibleName;
-      }
-    }
-    const role = getAriaRole(element) || "";
-    const tagName = elementSafeTagName(element);
-    if (!!options.embeddedInLabel || !!options.embeddedInLabelledBy || options.embeddedInTargetElement === "descendant") {
-      const isOwnLabel = [...element.labels || []].includes(element);
-      const isOwnLabelledBy = (labelledBy || []).includes(element);
-      if (!isOwnLabel && !isOwnLabelledBy) {
-        if (role === "textbox" || role === "searchbox") {
-          options.visitedElements.add(element);
-          if (tagName === "INPUT" || tagName === "TEXTAREA")
-            return compositeString(element.value, element, options.collectElements);
-          return compositeString(element.textContent, element, options.collectElements);
-        }
-        if (["combobox", "listbox"].includes(role)) {
-          options.visitedElements.add(element);
-          let selectedOptions;
-          if (tagName === "SELECT") {
-            selectedOptions = [...element.selectedOptions];
-            if (!selectedOptions.length && element.options.length)
-              selectedOptions.push(element.options[0]);
-          } else {
-            const listbox = role === "combobox" ? queryInAriaOwned(element, "*").find((e) => getAriaRole(e) === "listbox") : element;
-            selectedOptions = listbox ? queryInAriaOwned(listbox, '[aria-selected="true"]').filter((e) => getAriaRole(e) === "option") : [];
-          }
-          if (!selectedOptions.length && tagName === "INPUT") {
-            return compositeString(element.value, element, options.collectElements);
-          }
-          return joinCompositeString(selectedOptions.map((option) => getTextAlternativeInternal(option, childOptions)), " ", options.collectElements);
-        }
-        if (["progressbar", "scrollbar", "slider", "spinbutton", "meter"].includes(role)) {
-          options.visitedElements.add(element);
-          if (element.hasAttribute("aria-valuetext"))
-            return compositeString(element.getAttribute("aria-valuetext"), element, options.collectElements);
-          if (element.hasAttribute("aria-valuenow"))
-            return compositeString(element.getAttribute("aria-valuenow"), element, options.collectElements);
-          return compositeString(element.getAttribute("value"), element, options.collectElements);
-        }
-        if (["menu"].includes(role)) {
-          options.visitedElements.add(element);
-          return emptyCompositeString();
-        }
-      }
-    }
-    const ariaLabel = element.getAttribute("aria-label") || "";
-    if (trimFlatString(ariaLabel)) {
-      options.visitedElements.add(element);
-      return compositeString(ariaLabel, element, options.collectElements);
-    }
-    if (!["presentation", "none"].includes(role)) {
-      if (tagName === "INPUT" && ["button", "submit", "reset"].includes(element.type)) {
-        options.visitedElements.add(element);
-        const value = element.value || "";
-        if (trimFlatString(value))
-          return compositeString(value, element, options.collectElements);
-        if (element.type === "submit")
-          return compositeString("Submit", element, options.collectElements);
-        if (element.type === "reset")
-          return compositeString("Reset", element, options.collectElements);
-        const title = element.getAttribute("title") || "";
-        return compositeString(title, element, options.collectElements);
-      }
-      if (tagName === "INPUT" && element.type === "file") {
-        options.visitedElements.add(element);
-        const labels = element.labels || [];
-        if (labels.length && !options.embeddedInLabelledBy)
-          return getAccessibleNameFromAssociatedLabels(labels, options);
-        return compositeString("Choose File", element, options.collectElements);
-      }
-      if (tagName === "INPUT" && element.type === "image") {
-        options.visitedElements.add(element);
-        const labels = element.labels || [];
-        if (labels.length && !options.embeddedInLabelledBy)
-          return getAccessibleNameFromAssociatedLabels(labels, options);
-        const alt = element.getAttribute("alt") || "";
-        if (trimFlatString(alt))
-          return compositeString(alt, element, options.collectElements);
-        const title = element.getAttribute("title") || "";
-        if (trimFlatString(title))
-          return compositeString(title, element, options.collectElements);
-        return compositeString("Submit", element, options.collectElements);
-      }
-      if (!labelledBy && tagName === "BUTTON") {
-        options.visitedElements.add(element);
-        const labels = element.labels || [];
-        if (labels.length)
-          return getAccessibleNameFromAssociatedLabels(labels, options);
-      }
-      if (!labelledBy && tagName === "OUTPUT") {
-        options.visitedElements.add(element);
-        const labels = element.labels || [];
-        if (labels.length)
-          return getAccessibleNameFromAssociatedLabels(labels, options);
-        return compositeString(element.getAttribute("title") || "", element, options.collectElements);
-      }
-      if (!labelledBy && (tagName === "TEXTAREA" || tagName === "SELECT" || tagName === "INPUT" || tagName === "METER" || tagName === "PROGRESS")) {
-        options.visitedElements.add(element);
-        const labels = element.labels || [];
-        if (labels.length)
-          return getAccessibleNameFromAssociatedLabels(labels, options);
-        const usePlaceholder = tagName === "INPUT" && ["text", "password", "number", "search", "tel", "email", "url"].includes(element.type) || tagName === "TEXTAREA";
-        const placeholder = element.getAttribute("placeholder") || "";
-        const title = element.getAttribute("title") || "";
-        if (!usePlaceholder || title)
-          return compositeString(title, element, options.collectElements);
-        return compositeString(placeholder, element, options.collectElements);
-      }
-      if (!labelledBy && tagName === "FIELDSET") {
-        options.visitedElements.add(element);
-        for (let child = element.firstElementChild;child; child = child.nextElementSibling) {
-          if (elementSafeTagName(child) === "LEGEND") {
-            return getTextAlternativeInternal(child, {
-              ...childOptions,
-              embeddedInNativeTextAlternative: { element: child, hidden: isElementHiddenForAria(child) }
-            });
-          }
-        }
-        const title = element.getAttribute("title") || "";
-        return compositeString(title, element, options.collectElements);
-      }
-      if (!labelledBy && tagName === "FIGURE") {
-        options.visitedElements.add(element);
-        for (let child = element.firstElementChild;child; child = child.nextElementSibling) {
-          if (elementSafeTagName(child) === "FIGCAPTION") {
-            return getTextAlternativeInternal(child, {
-              ...childOptions,
-              embeddedInNativeTextAlternative: { element: child, hidden: isElementHiddenForAria(child) }
-            });
-          }
-        }
-        const title = element.getAttribute("title") || "";
-        return compositeString(title, element, options.collectElements);
-      }
-      if (tagName === "IMG") {
-        options.visitedElements.add(element);
-        const alt = element.getAttribute("alt") || "";
-        if (trimFlatString(alt))
-          return compositeString(alt, element, options.collectElements);
-        const title = element.getAttribute("title") || "";
-        return compositeString(title, element, options.collectElements);
-      }
-      if (tagName === "TABLE") {
-        options.visitedElements.add(element);
-        for (let child = element.firstElementChild;child; child = child.nextElementSibling) {
-          if (elementSafeTagName(child) === "CAPTION") {
-            return getTextAlternativeInternal(child, {
-              ...childOptions,
-              embeddedInNativeTextAlternative: { element: child, hidden: isElementHiddenForAria(child) }
-            });
-          }
-        }
-        const summary = element.getAttribute("summary") || "";
-        if (summary)
-          return compositeString(summary, element, options.collectElements);
-      }
-      if (tagName === "AREA") {
-        options.visitedElements.add(element);
-        const alt = element.getAttribute("alt") || "";
-        if (trimFlatString(alt))
-          return compositeString(alt, element, options.collectElements);
-        const title = element.getAttribute("title") || "";
-        return compositeString(title, element, options.collectElements);
-      }
-      if (tagName === "SVG" || element.ownerSVGElement) {
-        options.visitedElements.add(element);
-        for (let child = element.firstElementChild;child; child = child.nextElementSibling) {
-          if (elementSafeTagName(child) === "TITLE" && child.ownerSVGElement) {
-            return getTextAlternativeInternal(child, {
-              ...childOptions,
-              embeddedInLabelledBy: { element: child, hidden: isElementHiddenForAria(child) }
-            });
-          }
-        }
-      }
-      if (element.ownerSVGElement && tagName === "A") {
-        const title = element.getAttribute("xlink:title") || "";
-        if (trimFlatString(title)) {
-          options.visitedElements.add(element);
-          return compositeString(title, element, options.collectElements);
-        }
-      }
-    }
-    const shouldNameFromContentForSummary = tagName === "SUMMARY" && !["presentation", "none"].includes(role);
-    if (allowsNameFromContent(role, options.embeddedInTargetElement === "descendant") || shouldNameFromContentForSummary || !!options.embeddedInLabelledBy || !!options.embeddedInDescribedBy || !!options.embeddedInLabel || !!options.embeddedInNativeTextAlternative) {
-      options.visitedElements.add(element);
-      const accessibleName = innerAccumulatedElementText(element, childOptions);
-      const maybeTrimmedAccessibleName = options.embeddedInTargetElement === "self" ? trimFlatString(accessibleName.text) : accessibleName.text;
-      if (maybeTrimmedAccessibleName) {
-        if (options.outDerivedFromContent && insideTargetElement(options) && trimFlatString(accessibleName.text))
-          options.outDerivedFromContent.value = true;
-        accessibleName.elements?.add(element);
-        return accessibleName;
-      }
-    }
-    if (!["presentation", "none"].includes(role) || tagName === "IFRAME" || tagName === "FRAME") {
-      options.visitedElements.add(element);
-      const title = element.getAttribute("title") || "";
-      if (trimFlatString(title))
-        return compositeString(title, element, options.collectElements);
-    }
-    options.visitedElements.add(element);
-    return emptyCompositeString();
-  }
-  function innerAccumulatedElementText(element, options) {
-    const tokens = [];
-    const elements = options.collectElements ? new Set : undefined;
-    const visit = (node, skipSlotted) => {
-      if (skipSlotted && node.assignedSlot)
-        return;
-      if (node.nodeType === 1) {
-        const display = getElementComputedStyle(node)?.display || "inline";
-        const childComposite = getTextAlternativeInternal(node, options);
-        let token = childComposite.text;
-        for (const contributor of childComposite.elements || [])
-          elements?.add(contributor);
-        if (display !== "inline" || node.nodeName === "BR")
-          token = " " + token + " ";
-        tokens.push(token);
-      } else if (node.nodeType === 3) {
-        tokens.push(node.textContent || "");
-      }
-    };
-    tokens.push(getCSSContent(element, "::before") || "");
-    const content = getCSSContent(element);
-    if (content !== undefined) {
-      tokens.push(content);
-    } else {
-      const assignedNodes = element.nodeName === "SLOT" ? element.assignedNodes() : [];
-      if (assignedNodes.length) {
-        for (const child of assignedNodes)
-          visit(child, false);
-      } else {
-        for (let child = element.firstChild;child; child = child.nextSibling)
-          visit(child, true);
-        if (element.shadowRoot) {
-          for (let child = element.shadowRoot.firstChild;child; child = child.nextSibling)
-            visit(child, true);
-        }
-        for (const owned of getIdRefs(element, element.getAttribute("aria-owns")))
-          visit(owned, true);
-      }
-    }
-    tokens.push(getCSSContent(element, "::after") || "");
-    return { text: tokens.join(""), elements };
-  }
-  var kAriaSelectedRoles = ["gridcell", "option", "row", "tab", "rowheader", "columnheader", "treeitem"];
-  function getAriaSelected(element) {
-    if (elementSafeTagName(element) === "OPTION")
-      return element.selected;
-    if (kAriaSelectedRoles.includes(getAriaRole(element) || ""))
-      return getAriaBoolean(element.getAttribute("aria-selected")) === true;
-    return false;
-  }
-  var kAriaCheckedRoles = ["checkbox", "menuitemcheckbox", "option", "radio", "switch", "menuitemradio", "treeitem"];
-  function getAriaChecked(element) {
-    const result = getChecked(element, true);
-    return result === "error" ? false : result;
-  }
-  function getCheckedAllowMixed(element) {
-    return getChecked(element, true);
-  }
-  function getCheckedWithoutMixed(element) {
-    const result = getChecked(element, false);
-    return result;
-  }
-  function getChecked(element, allowMixed) {
-    const tagName = elementSafeTagName(element);
-    if (allowMixed && tagName === "INPUT" && element.indeterminate)
-      return "mixed";
-    if (tagName === "INPUT" && ["checkbox", "radio"].includes(element.type))
-      return element.checked;
-    if (kAriaCheckedRoles.includes(getAriaRole(element) || "")) {
-      const checked = element.getAttribute("aria-checked");
-      if (checked === "true")
-        return true;
-      if (allowMixed && checked === "mixed")
-        return "mixed";
-      return false;
-    }
-    return "error";
-  }
-  var kAriaReadonlyRoles = ["checkbox", "combobox", "grid", "gridcell", "listbox", "radiogroup", "slider", "spinbutton", "textbox", "columnheader", "rowheader", "searchbox", "switch", "treegrid"];
-  function getReadonly(element) {
-    const tagName = elementSafeTagName(element);
-    if (["INPUT", "TEXTAREA", "SELECT"].includes(tagName))
-      return element.hasAttribute("readonly");
-    if (kAriaReadonlyRoles.includes(getAriaRole(element) || ""))
-      return element.getAttribute("aria-readonly") === "true";
-    if (element.isContentEditable)
-      return false;
-    return "error";
-  }
-  var kAriaPressedRoles = ["button"];
-  function getAriaPressed(element) {
-    if (kAriaPressedRoles.includes(getAriaRole(element) || "")) {
-      const pressed = element.getAttribute("aria-pressed");
-      if (pressed === "true")
-        return true;
-      if (pressed === "mixed")
-        return "mixed";
-    }
-    return false;
-  }
-  var kAriaExpandedRoles = ["application", "button", "checkbox", "combobox", "gridcell", "link", "listbox", "menuitem", "row", "rowheader", "tab", "treeitem", "columnheader", "menuitemcheckbox", "menuitemradio", "rowheader", "switch"];
-  function getAriaExpanded(element) {
-    if (elementSafeTagName(element) === "DETAILS")
-      return element.open;
-    if (kAriaExpandedRoles.includes(getAriaRole(element) || "")) {
-      const expanded = element.getAttribute("aria-expanded");
-      if (expanded === null)
-        return;
-      if (expanded === "true")
-        return true;
-      return false;
-    }
-    return;
-  }
-  var kAriaLevelRoles = ["heading", "listitem", "row", "treeitem"];
-  function getAriaLevel(element) {
-    const native = { H1: 1, H2: 2, H3: 3, H4: 4, H5: 5, H6: 6 }[elementSafeTagName(element)];
-    if (native)
-      return native;
-    if (kAriaLevelRoles.includes(getAriaRole(element) || "")) {
-      const attr = element.getAttribute("aria-level");
-      const value = attr === null ? Number.NaN : Number(attr);
-      if (Number.isInteger(value) && value >= 1)
-        return value;
-    }
-    return 0;
-  }
-  var kAriaDisabledRoles = ["application", "button", "composite", "gridcell", "group", "input", "link", "menuitem", "scrollbar", "separator", "tab", "checkbox", "columnheader", "combobox", "grid", "listbox", "menu", "menubar", "menuitemcheckbox", "menuitemradio", "option", "radio", "radiogroup", "row", "rowheader", "searchbox", "select", "slider", "spinbutton", "switch", "tablist", "textbox", "toolbar", "tree", "treegrid", "treeitem"];
-  function getAriaDisabled(element) {
-    return isNativelyDisabled(element) || hasExplicitAriaDisabled(element);
-  }
-  function isNativelyDisabled(element) {
-    const isNativeFormControl = ["BUTTON", "INPUT", "SELECT", "TEXTAREA", "OPTION", "OPTGROUP"].includes(elementSafeTagName(element));
-    return isNativeFormControl && (element.hasAttribute("disabled") || belongsToDisabledOptGroup(element) || belongsToDisabledFieldSet(element));
-  }
-  function belongsToDisabledOptGroup(element) {
-    return elementSafeTagName(element) === "OPTION" && !!element.closest("OPTGROUP[DISABLED]");
-  }
-  function belongsToDisabledFieldSet(element) {
-    const fieldSetElement = element?.closest("FIELDSET[DISABLED]");
-    if (!fieldSetElement)
-      return false;
-    const legendElement = fieldSetElement.querySelector(":scope > LEGEND");
-    return !legendElement || !legendElement.contains(element);
-  }
-  function hasExplicitAriaDisabled(element) {
-    if (!kAriaDisabledRoles.includes(getAriaRole(element) || ""))
-      return false;
-    return hasAriaDisabledInChain(element);
-  }
-  function hasAriaDisabledInChain(element) {
-    let result = cacheAriaDisabled?.get(element);
-    if (result === undefined) {
-      const attribute = (element.getAttribute("aria-disabled") || "").toLowerCase();
-      if (attribute === "true") {
-        result = true;
-      } else if (attribute === "false") {
-        result = false;
-      } else {
-        const parent = parentElementOrShadowHost(element);
-        result = parent ? hasAriaDisabledInChain(parent) : false;
-      }
-      cacheAriaDisabled?.set(element, result);
-    }
-    return result;
-  }
-  function getAccessibleNameFromAssociatedLabels(labels, options) {
-    return joinCompositeString([...labels].map((label) => getTextAlternativeInternal(label, {
-      ...options,
-      embeddedInLabel: { element: label, hidden: isElementHiddenForAria(label) },
-      embeddedInNativeTextAlternative: undefined,
-      embeddedInLabelledBy: undefined,
-      embeddedInDescribedBy: undefined,
-      embeddedInTargetElement: undefined
-    })).filter((accessibleName) => !!accessibleName.text), " ", options.collectElements);
-  }
-  function receivesPointerEvents(element) {
-    const cache = cachePointerEvents;
-    let e = element;
-    let result;
-    const parents = [];
-    for (;e; e = parentElementOrShadowHost(e)) {
-      const cached = cache.get(e);
-      if (cached !== undefined) {
-        result = cached;
-        break;
-      }
-      parents.push(e);
-      const style = getElementComputedStyle(e);
-      if (!style) {
-        result = true;
-        break;
-      }
-      const value = style.pointerEvents;
-      if (value) {
-        result = value !== "none";
-        break;
-      }
-    }
-    if (result === undefined)
-      result = true;
-    for (const parent of parents)
-      cache.set(parent, result);
-    return result;
-  }
-  var cacheAccessibleName;
-  var cacheAccessibleNameHidden;
-  var cacheAccessibleNameText;
-  var cacheAccessibleNameTextHidden;
-  var cacheAccessibleDescription;
-  var cacheAccessibleDescriptionHidden;
-  var cacheAccessibleErrorMessage;
-  var cacheIsHidden;
-  var cachePseudoContent;
-  var cachePseudoContentBefore;
-  var cachePseudoContentAfter;
-  var cachePointerEvents;
-  var cacheAriaRole;
-  var cacheAriaDisabled;
-  var cachesCounter2 = 0;
-  function beginAriaCaches() {
-    beginDOMCaches();
-    ++cachesCounter2;
-    cacheAriaRole ??= new Map;
-    cacheAriaDisabled ??= new Map;
-    cacheAccessibleName ??= new Map;
-    cacheAccessibleNameHidden ??= new Map;
-    cacheAccessibleNameText ??= new Map;
-    cacheAccessibleNameTextHidden ??= new Map;
-    cacheAccessibleDescription ??= new Map;
-    cacheAccessibleDescriptionHidden ??= new Map;
-    cacheAccessibleErrorMessage ??= new Map;
-    cacheIsHidden ??= new Map;
-    cachePseudoContent ??= new Map;
-    cachePseudoContentBefore ??= new Map;
-    cachePseudoContentAfter ??= new Map;
-    cachePointerEvents ??= new Map;
-  }
-  function endAriaCaches() {
-    if (!--cachesCounter2) {
-      cacheAccessibleName = undefined;
-      cacheAccessibleNameHidden = undefined;
-      cacheAccessibleNameText = undefined;
-      cacheAccessibleNameTextHidden = undefined;
-      cacheAccessibleDescription = undefined;
-      cacheAccessibleDescriptionHidden = undefined;
-      cacheAccessibleErrorMessage = undefined;
-      cacheIsHidden = undefined;
-      cachePseudoContent = undefined;
-      cachePseudoContentBefore = undefined;
-      cachePseudoContentAfter = undefined;
-      cachePointerEvents = undefined;
-      cacheAriaRole = undefined;
-      cacheAriaDisabled = undefined;
-    }
-    endDOMCaches();
-  }
-  var inputTypeToRole = {
-    button: "button",
-    checkbox: "checkbox",
-    image: "button",
-    number: "spinbutton",
-    radio: "radio",
-    range: "slider",
-    reset: "button",
-    submit: "button"
-  };
-  function emptyCompositeString() {
-    return { text: "" };
-  }
-  function compositeString(text, element, collectElements) {
-    const elements = text && collectElements ? new Set([element]) : undefined;
-    return { text: text || "", elements };
-  }
-  function joinCompositeString(parts, separator, collectElements) {
-    let elements;
-    if (collectElements) {
-      elements = new Set;
-      for (const part of parts) {
-        for (const element of part.elements || [])
-          elements.add(element);
-      }
-    }
-    return { text: parts.map((part) => part.text).join(separator), elements };
-  }
-
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/ariaSnapshot.ts
-  var lastRef = 0;
-  function toInternalOptions(options) {
-    const renderBoxes = options.boxes;
-    if (options.mode === "ai") {
-      return {
-        visibility: "ariaOrVisible",
-        refs: "interactable",
-        refPrefix: options.refPrefix,
-        includeGenericRole: true,
-        renderActive: !options.doNotRenderActive,
-        renderCursorPointer: true,
-        renderBoxes
-      };
-    }
-    if (options.mode === "autoexpect") {
-      return { visibility: "ariaAndVisible", refs: "none", renderBoxes };
-    }
-    return { visibility: "aria", refs: "none", renderBoxes };
-  }
-  function generateAriaTree(rootElement, publicOptions) {
-    const options = toInternalOptions(publicOptions);
-    const visited = new Set;
-    const nameSourceElements = new Map;
-    const snapshot = {
-      root: { role: "fragment", name: "", children: [], props: {}, box: computeBox(rootElement), receivesPointerEvents: true },
-      info: new Map,
-      refs: new Map,
-      iframeRefs: []
-    };
-    setAriaNodeElement(snapshot.root, rootElement);
-    const visit = (ariaNode, node, parentElementVisible) => {
-      if (visited.has(node))
-        return;
-      visited.add(node);
-      if (node.nodeType === Node.TEXT_NODE && node.nodeValue) {
-        if (!parentElementVisible)
-          return;
-        const text = node.nodeValue;
-        if (ariaNode.role !== "textbox" && text)
-          ariaNode.children.push(node.nodeValue || "");
-        return;
-      }
-      if (node.nodeType !== Node.ELEMENT_NODE)
-        return;
-      const element = node;
-      const isElementVisibleForAria = !isElementHiddenForAria(element);
-      let visible = isElementVisibleForAria;
-      if (options.visibility === "ariaOrVisible")
-        visible = isElementVisibleForAria || isElementVisible(element);
-      if (options.visibility === "ariaAndVisible")
-        visible = isElementVisibleForAria && isElementVisible(element);
-      if (options.visibility === "aria" && !visible)
-        return;
-      const ariaChildren = [];
-      if (element.hasAttribute("aria-owns")) {
-        const ids = element.getAttribute("aria-owns").split(/\s+/);
-        for (const id of ids) {
-          const ownedElement = rootElement.ownerDocument.getElementById(id);
-          if (ownedElement)
-            ariaChildren.push(ownedElement);
-        }
-      }
-      const childAriaNode = visible ? toAriaNode(element, options, nameSourceElements) : null;
-      if (childAriaNode && element.getAttribute("aria-hidden")?.toLowerCase() === "true")
-        childAriaNode.props["aria-hidden"] = "true";
-      let elementInfo;
-      if (childAriaNode) {
-        if (childAriaNode.ref) {
-          elementInfo = { element, nameFromContentRefs: [] };
-          snapshot.info.set(childAriaNode.ref, elementInfo);
-          snapshot.refs.set(element, childAriaNode.ref);
-          if (childAriaNode.role === "iframe")
-            snapshot.iframeRefs.push(childAriaNode.ref);
-        }
-        ariaNode.children.push(childAriaNode);
-      }
-      processElement(childAriaNode || ariaNode, element, ariaChildren, visible);
-      if (elementInfo) {
-        for (const contributor of nameSourceElements.get(childAriaNode) || []) {
-          const ref = snapshot.refs.get(contributor);
-          if (ref && ref !== childAriaNode.ref)
-            elementInfo.nameFromContentRefs.push(ref);
-        }
-      }
-    };
-    function processElement(ariaNode, element, ariaChildren, parentElementVisible) {
-      const display = getElementComputedStyle(element)?.display || "inline";
-      const treatAsBlock = display !== "inline" || element.nodeName === "BR" ? " " : "";
-      if (treatAsBlock)
-        ariaNode.children.push(treatAsBlock);
-      ariaNode.children.push(getCSSContent(element, "::before") || "");
-      const assignedNodes = element.nodeName === "SLOT" ? element.assignedNodes() : [];
-      if (assignedNodes.length) {
-        for (const child of assignedNodes)
-          visit(ariaNode, child, parentElementVisible);
-      } else {
-        for (let child = element.firstChild;child; child = child.nextSibling) {
-          if (!child.assignedSlot)
-            visit(ariaNode, child, parentElementVisible);
-        }
-        if (element.shadowRoot) {
-          for (let child = element.shadowRoot.firstChild;child; child = child.nextSibling)
-            visit(ariaNode, child, parentElementVisible);
-        }
-      }
-      for (const child of ariaChildren)
-        visit(ariaNode, child, parentElementVisible);
-      ariaNode.children.push(getCSSContent(element, "::after") || "");
-      if (treatAsBlock)
-        ariaNode.children.push(treatAsBlock);
-      if (ariaNode.children.length === 1 && ariaNode.name === ariaNode.children[0])
-        ariaNode.children = [];
-      if (ariaNode.role === "link" && element.hasAttribute("href")) {
-        const href = element.getAttribute("href");
-        ariaNode.props["url"] = truncateDataUrl(href);
-      }
-      if (ariaNode.role === "textbox" && element.hasAttribute("placeholder") && element.getAttribute("placeholder") !== ariaNode.name) {
-        const placeholder = element.getAttribute("placeholder");
-        ariaNode.props["placeholder"] = placeholder;
-      }
-    }
-    beginAriaCaches();
-    try {
-      visit(snapshot.root, rootElement, true);
-    } finally {
-      endAriaCaches();
-    }
-    distillAriaSnapshot(snapshot, publicOptions);
-    return snapshot;
-  }
-  function computeAriaRef(ariaNode, options) {
-    if (options.refs === "none")
-      return;
-    if (options.refs === "interactable" && (!ariaNode.box.visible || !ariaNode.receivesPointerEvents))
-      return;
-    const element = ariaNodeElement(ariaNode);
-    let ariaRef = element._ariaRef;
-    if (!ariaRef || ariaRef.role !== ariaNode.role || ariaRef.name !== ariaNode.name) {
-      ariaRef = { role: ariaNode.role, name: ariaNode.name, ref: (options.refPrefix ?? "") + "e" + ++lastRef };
-      element._ariaRef = ariaRef;
-    }
-    ariaNode.ref = ariaRef.ref;
-  }
-  function toAriaNode(element, options, nameSourceElements) {
-    const active = element.ownerDocument.activeElement === element && element.ownerDocument.hasFocus();
-    if (element.nodeName === "IFRAME" || element.nodeName === "FRAME") {
-      const ariaNode = {
-        role: "iframe",
-        name: "",
-        children: [],
-        props: {},
-        box: computeBox(element),
-        receivesPointerEvents: true,
-        active
-      };
-      setAriaNodeElement(ariaNode, element);
-      computeAriaRef(ariaNode, options);
-      return ariaNode;
-    }
-    const defaultRole = options.includeGenericRole ? "generic" : null;
-    const role = getAriaRole(element) ?? defaultRole;
-    if (!role || role === "presentation" || role === "none")
-      return null;
-    const name = getElementAccessibleName(element, false);
-    const receivesPointerEvents2 = receivesPointerEvents(element);
-    const box = computeBox(element);
-    if (role === "generic" && box.inline && element.childNodes.length === 1 && element.childNodes[0].nodeType === Node.TEXT_NODE)
-      return null;
-    const result = {
-      role,
-      name: normalizeWhiteSpace(name.text),
-      children: [],
-      props: {},
-      box,
-      receivesPointerEvents: receivesPointerEvents2,
-      active
-    };
-    setAriaNodeElement(result, element);
-    nameSourceElements.set(result, name.elements);
-    computeAriaRef(result, options);
-    if (kAriaCheckedRoles.includes(role))
-      result.checked = getAriaChecked(element);
-    if (kAriaDisabledRoles.includes(role))
-      result.disabled = getAriaDisabled(element);
-    if (kAriaExpandedRoles.includes(role))
-      result.expanded = getAriaExpanded(element);
-    if (kAriaInvalidRoles.includes(role)) {
-      const invalid = getAriaInvalid(element);
-      result.invalid = invalid === "false" ? false : invalid === "true" ? true : invalid;
-    }
-    if (kAriaLevelRoles.includes(role))
-      result.level = getAriaLevel(element);
-    if (kAriaPressedRoles.includes(role))
-      result.pressed = getAriaPressed(element);
-    if (kAriaSelectedRoles.includes(role))
-      result.selected = getAriaSelected(element);
-    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
-      if (element.type !== "checkbox" && element.type !== "radio" && element.type !== "file")
-        result.children = [element.value];
-    }
-    return result;
-  }
-  function matchesStringOrRegex(text, template) {
-    if (!template)
-      return true;
-    if (!text)
-      return false;
-    if (typeof template === "string")
-      return text === template;
-    return !!text.match(new RegExp(template.pattern));
-  }
-  function matchesTextValue(text, template) {
-    if (!template?.normalized)
-      return true;
-    if (!text)
-      return false;
-    if (text === template.normalized)
-      return true;
-    if (text === template.raw)
-      return true;
-    const regex = cachedRegex(template);
-    if (regex)
-      return !!text.match(regex);
-    return false;
-  }
-  var cachedRegexSymbol = Symbol("cachedRegex");
-  function cachedRegex(template) {
-    if (template[cachedRegexSymbol] !== undefined)
-      return template[cachedRegexSymbol];
-    const { raw } = template;
-    const canBeRegex = raw.startsWith("/") && raw.endsWith("/") && raw.length > 1;
-    let regex;
-    try {
-      regex = canBeRegex ? new RegExp(raw.slice(1, -1)) : null;
-    } catch (e) {
-      regex = null;
-    }
-    template[cachedRegexSymbol] = regex;
-    return regex;
-  }
-  function matchesExpectAriaTemplate(rootElement, template) {
-    const snapshot = generateAriaTree(rootElement, { mode: "default" });
-    const matches = matchesNodeDeep(snapshot.root, template, false, false);
-    const { json } = renderAriaTreeAsJSON(snapshot, { mode: "default" });
-    return {
-      matches,
-      received: {
-        raw: renderAriaSnapshotAsYaml(json),
-        regex: renderAriaSnapshotAsYaml(json, { convertStringsToRegex: true })
-      }
-    };
-  }
-  function getAllElementsMatchingExpectAriaTemplate(rootElement, template) {
-    const root = generateAriaTree(rootElement, { mode: "default" }).root;
-    const matches = matchesNodeDeep(root, template, true, false);
-    return matches.map((n) => ariaNodeElement(n));
-  }
-  function matchesNode(node, template, isDeepEqual) {
-    if (typeof node === "string" && template.kind === "text")
-      return matchesTextValue(node, template.text);
-    if (node === null || typeof node !== "object" || template.kind !== "role")
-      return false;
-    if (template.role !== "fragment" && template.role !== node.role)
-      return false;
-    if (template.checked !== undefined && template.checked !== node.checked)
-      return false;
-    if (template.disabled !== undefined && template.disabled !== node.disabled)
-      return false;
-    if (template.expanded !== undefined && template.expanded !== node.expanded)
-      return false;
-    if (template.invalid !== undefined && template.invalid !== node.invalid)
-      return false;
-    if (template.level !== undefined && template.level !== node.level)
-      return false;
-    if (template.pressed !== undefined && template.pressed !== node.pressed)
-      return false;
-    if (template.selected !== undefined && template.selected !== node.selected)
-      return false;
-    if (!matchesStringOrRegex(node.name, template.name))
-      return false;
-    if (!matchesTextValue(node.props.url, template.props?.url))
-      return false;
-    if (template.containerMode === "contain")
-      return containsList(node.children || [], template.children || []);
-    if (template.containerMode === "equal")
-      return listEqual(node.children || [], template.children || [], false);
-    if (template.containerMode === "deep-equal" || isDeepEqual)
-      return listEqual(node.children || [], template.children || [], true);
-    return containsList(node.children || [], template.children || []);
-  }
-  function listEqual(children, template, isDeepEqual) {
-    if (template.length !== children.length)
-      return false;
-    for (let i = 0;i < template.length; ++i) {
-      if (!matchesNode(children[i], template[i], isDeepEqual))
-        return false;
-    }
-    return true;
-  }
-  function containsList(children, template) {
-    if (template.length > children.length)
-      return false;
-    const cc = children.slice();
-    const tt = template.slice();
-    for (const t of tt) {
-      let c = cc.shift();
-      while (c) {
-        if (matchesNode(c, t, false))
-          break;
-        c = cc.shift();
-      }
-      if (!c)
-        return false;
-    }
-    return true;
-  }
-  function matchesNodeDeep(root, template, collectAll, isDeepEqual) {
-    const results = [];
-    const visit = (node, parent) => {
-      if (matchesNode(node, template, isDeepEqual)) {
-        const result = typeof node === "string" ? parent : node;
-        if (result)
-          results.push(result);
-        return !collectAll;
-      }
-      if (typeof node === "string")
-        return false;
-      for (const child of node.children || []) {
-        if (visit(child, node))
-          return true;
-      }
-      return false;
-    };
-    visit(root, null);
-    return results;
-  }
-  function renderAriaTreeAsJSON(ariaSnapshot, publicOptions) {
-    const options = toInternalOptions(publicOptions);
-    const iframeDepths = {};
-    const visit = (ariaNode, depth, renderCursorPointer) => {
-      if (ariaNode.role === "iframe" && ariaNode.ref)
-        iframeDepths[ariaNode.ref] = depth;
-      const node = { role: ariaNode.role };
-      if (ariaNode.name)
-        node.name = ariaNode.name;
-      if (ariaNode.checked === "mixed" || ariaNode.checked === true)
-        node.checked = ariaNode.checked;
-      if (ariaNode.disabled)
-        node.disabled = true;
-      if (ariaNode.expanded)
-        node.expanded = true;
-      if (ariaNode.active && options.renderActive)
-        node.active = true;
-      if (ariaNode.invalid)
-        node.invalid = ariaNode.invalid;
-      if (ariaNode.level)
-        node.level = ariaNode.level;
-      if (ariaNode.pressed === "mixed" || ariaNode.pressed === true)
-        node.pressed = ariaNode.pressed;
-      if (ariaNode.selected === true)
-        node.selected = true;
-      if (ariaNode.ref) {
-        node.ref = ariaNode.ref;
-        if (renderCursorPointer && hasPointerCursor(ariaNode))
-          node.cursor = "pointer";
-      }
-      if (options.renderBoxes) {
-        const element = ariaNodeElement(ariaNode);
-        if (element) {
-          const r = element.getBoundingClientRect();
-          node.box = { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) };
-        }
-      }
-      if (ariaNode.props.url !== undefined)
-        node.url = ariaNode.props.url;
-      if (ariaNode.props.placeholder !== undefined)
-        node.placeholder = ariaNode.props.placeholder;
-      if (ariaNode.props["aria-hidden"] !== undefined)
-        node.ariaHidden = true;
-      const singleTextChild = ariaNode.children.length === 1 && typeof ariaNode.children[0] === "string" ? ariaNode.children[0] : undefined;
-      const isAtDepthLimit = !!publicOptions.depth && depth === publicOptions.depth;
-      if (singleTextChild !== undefined) {
-        node.text = singleTextChild;
-      } else if (!isAtDepthLimit && ariaNode.children.length) {
-        const inCursorPointer = !!ariaNode.ref && renderCursorPointer && hasPointerCursor(ariaNode);
-        node.children = ariaNode.children.map((child) => {
-          if (typeof child === "string")
-            return child;
-          return visit(child, depth + 1, renderCursorPointer && !inCursorPointer);
-        });
-      }
-      return node;
-    };
-    const json = [];
-    const nodesToRender = ariaSnapshot.root.role === "fragment" ? ariaSnapshot.root.children : [ariaSnapshot.root];
-    for (const nodeToRender of nodesToRender) {
-      if (typeof nodeToRender === "string")
-        json.push({ role: "text", text: nodeToRender });
-      else
-        json.push(visit(nodeToRender, 0, !!options.renderCursorPointer));
-    }
-    return { json, iframeDepths };
-  }
-  var elementSymbol = Symbol("element");
-  function ariaNodeElement(ariaNode) {
-    return ariaNode[elementSymbol];
-  }
-  function setAriaNodeElement(ariaNode, element) {
-    ariaNode[elementSymbol] = element;
-  }
-  function findNewElement(from, to) {
-    const node = findNewNode(from, to);
-    return node ? ariaNodeElement(node) : undefined;
+  function findNewElement(_from, _to) {
+    return unsupportedInPage2("findNewElement");
   }
 
   // crates/neo-sdk/neo-playwright-js/src/stubs/highlight.ts
@@ -5223,33 +4042,17 @@
     return bestScore;
   }
 
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/selectorUtils.ts
-  function matchesAttributePart(value, attr) {
-    const objValue = typeof value === "string" && !attr.caseSensitive ? value.toUpperCase() : value;
-    const attrValue = typeof attr.value === "string" && !attr.caseSensitive ? attr.value.toUpperCase() : attr.value;
-    if (attr.op === "<truthy>")
-      return !!objValue;
-    if (attr.op === "=") {
-      if (attrValue instanceof RegExp) {
-        attrValue.lastIndex = 0;
-        return typeof objValue === "string" && !!objValue.match(attrValue);
+  // crates/neo-sdk/neo-playwright-js/src/stubs/roleSelectorEngine.ts
+  function createRoleEngine(internal) {
+    const engineName = internal ? "internal:role" : "role";
+    return {
+      queryAll(_root, _selector) {
+        throw new Error(`The '${engineName}' selector engine runs in Rust, not in the page`);
       }
-      return objValue === attrValue;
-    }
-    if (typeof objValue !== "string" || typeof attrValue !== "string")
-      return false;
-    if (attr.op === "*=")
-      return objValue.includes(attrValue);
-    if (attr.op === "^=")
-      return objValue.startsWith(attrValue);
-    if (attr.op === "$=")
-      return objValue.endsWith(attrValue);
-    if (attr.op === "|=")
-      return objValue === attrValue || objValue.startsWith(attrValue + "-");
-    if (attr.op === "~=")
-      return objValue.split(" ").includes(attrValue);
-    return false;
+    };
   }
+
+  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/selectorUtils.ts
   function shouldSkipForTextMatching(element) {
     const document2 = element.ownerDocument;
     return element.nodeName === "SCRIPT" || element.nodeName === "NOSCRIPT" || element.nodeName === "STYLE" || document2.head && document2.head.contains(element);
@@ -5319,175 +4122,6 @@
         return [...labels].map((label) => elementText(textCache, label));
     }
     return [];
-  }
-
-  // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/roleSelectorEngine.ts
-  var kSupportedAttributes = ["selected", "checked", "pressed", "expanded", "level", "disabled", "name", "description", "include-hidden"];
-  kSupportedAttributes.sort();
-  function validateSupportedRole(attr, roles, role) {
-    if (!roles.includes(role))
-      throw new Error(`"${attr}" attribute is only supported for roles: ${roles.slice().sort().map((role) => `"${role}"`).join(", ")}`);
-  }
-  function validateSupportedValues(attr, values) {
-    if (attr.op !== "<truthy>" && !values.includes(attr.value))
-      throw new Error(`"${attr.name}" must be one of ${values.map((v) => JSON.stringify(v)).join(", ")}`);
-  }
-  function validateSupportedOp(attr, ops) {
-    if (!ops.includes(attr.op))
-      throw new Error(`"${attr.name}" does not support "${attr.op}" matcher`);
-  }
-  function validateAttributes(attrs, role) {
-    const options = { role };
-    for (const attr of attrs) {
-      switch (attr.name) {
-        case "checked": {
-          validateSupportedRole(attr.name, kAriaCheckedRoles, role);
-          validateSupportedValues(attr, [true, false, "mixed"]);
-          validateSupportedOp(attr, ["<truthy>", "="]);
-          options.checked = attr.op === "<truthy>" ? true : attr.value;
-          break;
-        }
-        case "pressed": {
-          validateSupportedRole(attr.name, kAriaPressedRoles, role);
-          validateSupportedValues(attr, [true, false, "mixed"]);
-          validateSupportedOp(attr, ["<truthy>", "="]);
-          options.pressed = attr.op === "<truthy>" ? true : attr.value;
-          break;
-        }
-        case "selected": {
-          validateSupportedRole(attr.name, kAriaSelectedRoles, role);
-          validateSupportedValues(attr, [true, false]);
-          validateSupportedOp(attr, ["<truthy>", "="]);
-          options.selected = attr.op === "<truthy>" ? true : attr.value;
-          break;
-        }
-        case "expanded": {
-          validateSupportedRole(attr.name, kAriaExpandedRoles, role);
-          validateSupportedValues(attr, [true, false]);
-          validateSupportedOp(attr, ["<truthy>", "="]);
-          options.expanded = attr.op === "<truthy>" ? true : attr.value;
-          break;
-        }
-        case "level": {
-          validateSupportedRole(attr.name, kAriaLevelRoles, role);
-          if (typeof attr.value === "string")
-            attr.value = +attr.value;
-          if (attr.op !== "=" || typeof attr.value !== "number" || Number.isNaN(attr.value))
-            throw new Error(`"level" attribute must be compared to a number`);
-          options.level = attr.value;
-          break;
-        }
-        case "disabled": {
-          validateSupportedValues(attr, [true, false]);
-          validateSupportedOp(attr, ["<truthy>", "="]);
-          options.disabled = attr.op === "<truthy>" ? true : attr.value;
-          break;
-        }
-        case "name": {
-          if (attr.op === "<truthy>")
-            throw new Error(`"name" attribute must have a value`);
-          if (typeof attr.value !== "string" && !(attr.value instanceof RegExp))
-            throw new Error(`"name" attribute must be a string or a regular expression`);
-          options.name = attr.value;
-          options.nameOp = attr.op;
-          options.nameExact = attr.caseSensitive;
-          break;
-        }
-        case "description": {
-          if (attr.op === "<truthy>")
-            throw new Error(`"description" attribute must have a value`);
-          if (typeof attr.value !== "string" && !(attr.value instanceof RegExp))
-            throw new Error(`"description" attribute must be a string or a regular expression`);
-          options.description = attr.value;
-          options.descriptionOp = attr.op;
-          options.descriptionExact = attr.caseSensitive;
-          break;
-        }
-        case "include-hidden": {
-          validateSupportedValues(attr, [true, false]);
-          validateSupportedOp(attr, ["<truthy>", "="]);
-          options.includeHidden = attr.op === "<truthy>" ? true : attr.value;
-          break;
-        }
-        default: {
-          throw new Error(`Unknown attribute "${attr.name}", must be one of ${kSupportedAttributes.map((a) => `"${a}"`).join(", ")}.`);
-        }
-      }
-    }
-    return options;
-  }
-  function queryRole(scope, options, internal) {
-    const result = [];
-    const match = (element) => {
-      if (getAriaRole(element) !== options.role)
-        return;
-      if (options.selected !== undefined && getAriaSelected(element) !== options.selected)
-        return;
-      if (options.checked !== undefined && getAriaChecked(element) !== options.checked)
-        return;
-      if (options.pressed !== undefined && getAriaPressed(element) !== options.pressed)
-        return;
-      if (options.expanded !== undefined && getAriaExpanded(element) !== options.expanded)
-        return;
-      if (options.level !== undefined && getAriaLevel(element) !== options.level)
-        return;
-      if (options.disabled !== undefined && getAriaDisabled(element) !== options.disabled)
-        return;
-      if (!options.includeHidden) {
-        const isHidden = isElementHiddenForAria(element);
-        if (isHidden)
-          return;
-      }
-      if (options.name !== undefined) {
-        const accessibleName = normalizeWhiteSpace(getElementAccessibleNameText(element, !!options.includeHidden));
-        if (typeof options.name === "string")
-          options.name = normalizeWhiteSpace(options.name);
-        if (internal && !options.nameExact && options.nameOp === "=")
-          options.nameOp = "*=";
-        if (!matchesAttributePart(accessibleName, { name: "", jsonPath: [], op: options.nameOp || "=", value: options.name, caseSensitive: !!options.nameExact }))
-          return;
-      }
-      if (options.description !== undefined) {
-        const accessibleDescription = normalizeWhiteSpace(getElementAccessibleDescription(element, !!options.includeHidden).text);
-        if (typeof options.description === "string")
-          options.description = normalizeWhiteSpace(options.description);
-        if (internal && !options.descriptionExact && options.descriptionOp === "=")
-          options.descriptionOp = "*=";
-        if (!matchesAttributePart(accessibleDescription, { name: "", jsonPath: [], op: options.descriptionOp || "=", value: options.description, caseSensitive: !!options.descriptionExact }))
-          return;
-      }
-      result.push(element);
-    };
-    const query = (root) => {
-      const shadows = [];
-      if (root.shadowRoot)
-        shadows.push(root.shadowRoot);
-      for (const element of root.querySelectorAll("*")) {
-        match(element);
-        if (element.shadowRoot)
-          shadows.push(element.shadowRoot);
-      }
-      shadows.forEach(query);
-    };
-    query(scope);
-    return result;
-  }
-  function createRoleEngine(internal) {
-    return {
-      queryAll: (scope, selector) => {
-        const parsed = parseAttributeSelector(selector, true);
-        const role = parsed.name.toLowerCase();
-        if (!role)
-          throw new Error(`Role must not be empty`);
-        const options = validateAttributes(parsed.attributes, role);
-        beginAriaCaches();
-        try {
-          return queryRole(scope, options, internal);
-        } finally {
-          endAriaCaches();
-        }
-      }
-    };
   }
 
   // crates/neo-sdk/neo-playwright/third_party/playwright/packages/injected/src/selectorEvaluator.ts
@@ -8467,61 +7101,6 @@ ${value.stack}`;
       throw new ProbeError("internal", "the vendored InjectedScript keeps no _lastAriaSnapshotForQuery.info");
     return info;
   }
-  function lastSnapshotNodes(injected, json) {
-    const snapshot = Reflect.get(injected, "_lastAriaSnapshotForQuery");
-    const root = typeof snapshot === "object" && snapshot !== null ? Reflect.get(snapshot, "root") : undefined;
-    const treeNode = (value) => typeof value === "object" && value !== null && typeof Reflect.get(value, "role") === "string" && Array.isArray(Reflect.get(value, "children"));
-    if (!treeNode(root))
-      throw new ProbeError("internal", "the engine keeps no snapshot root");
-    const elementOf = (node) => {
-      const symbol = Object.getOwnPropertySymbols(node).find((symbol) => symbol.description === "element");
-      const element = symbol === undefined ? undefined : Reflect.get(node, symbol);
-      if (element === undefined && node.role === "fragment")
-        return;
-      if (!(element instanceof Element))
-        throw new ProbeError("internal", "the engine snapshot node has no element link");
-      return element;
-    };
-    const nodes = new Map;
-    const roots = root.role === "fragment" ? root.children : [root];
-    if (roots.length !== json.length)
-      throw new ProbeError("internal", "the engine snapshot root and JSON disagree");
-    const pairs = roots.map((source, index) => ({
-      source,
-      rendered: json[index]
-    }));
-    while (pairs.length) {
-      const pair = pairs.pop();
-      if (!pair?.rendered)
-        throw new ProbeError("internal", "the engine snapshot JSON has a missing node");
-      const { source, rendered } = pair;
-      if (typeof source === "string") {
-        if (rendered.role !== "text" || rendered.text !== source)
-          throw new ProbeError("internal", "the engine snapshot text and JSON disagree");
-        continue;
-      }
-      if (source.role !== rendered.role)
-        throw new ProbeError("internal", "the engine snapshot roles and JSON disagree");
-      const element = elementOf(source);
-      if (element)
-        nodes.set(rendered, element);
-      if (!rendered.children)
-        continue;
-      if (source.children.length !== rendered.children.length)
-        throw new ProbeError("internal", "the engine snapshot children and JSON disagree");
-      source.children.forEach((child, index) => {
-        const childJson = rendered.children?.[index];
-        if (typeof child === "string") {
-          if (child !== childJson)
-            throw new ProbeError("internal", "the engine snapshot text child and JSON disagree");
-        } else if (typeof childJson === "object" && childJson !== null)
-          pairs.push({ source: child, rendered: childJson });
-        else
-          throw new ProbeError("internal", "the engine snapshot child and JSON disagree");
-      });
-    }
-    return { nodes };
-  }
   function expectChecks(injected) {
     const single = Reflect.get(injected, "expectSingleElement");
     const every = Reflect.get(injected, "expectArray");
@@ -8619,17 +7198,6 @@ ${value.stack}`;
     diagnosticEngines.set(injected, adapter);
     return adapter;
   }
-  function expectFailureSnapshot(injected, element, params, frameVisible) {
-    const snapshot = Reflect.get(injected, "_ariaSnapshotForExpect");
-    if (typeof snapshot !== "function")
-      throw new ProbeError("internal", "the vendored InjectedScript has no _ariaSnapshotForExpect");
-    const text = Reflect.apply(snapshot, injected, [
-      element,
-      params,
-      frameVisible
-    ]);
-    return typeof text === "string" ? text : undefined;
-  }
   function frameSource(element) {
     if (element.nodeName !== "IFRAME" && element.nodeName !== "FRAME")
       return;
@@ -8650,9 +7218,20 @@ ${value.stack}`;
       const element = world.pins.live(target.pin);
       return element ? [element] : [];
     }
+    if ("set" in target)
+      return target.set.members.flatMap((member) => setMember(world, member) ?? []);
     const { chunk } = target;
     checkEngines(injected, chunk);
     return world.refs.query(() => injected.querySelectorAll(chunk, root ?? injected.document)).elements;
+  }
+  function setMember(world, member) {
+    const { document: document2 } = world.injected;
+    if (member === "document")
+      return document2.documentElement;
+    if ("node" in member)
+      throw new ProbeError("internal", "a resolved set names a handed node, which only a stage takes");
+    const element = world.pins.live(member.pin);
+    return element?.ownerDocument === document2 ? element : undefined;
   }
   function resolveTarget(world, target, strictness, root) {
     const { injected } = world;
@@ -8666,6 +7245,8 @@ ${value.stack}`;
       const element = world.pins.live(target.pin);
       return element ? { kind: "one", element } : { kind: "detached" };
     }
+    if ("set" in target)
+      return resolvedSet(world, target.set, strictness);
     const { chunk } = target;
     checkEngines(injected, chunk);
     const { elements, staleRef } = world.refs.query(() => injected.querySelectorAll(chunk, root ?? injected.document));
@@ -8673,10 +7254,40 @@ ${value.stack}`;
     if (first === undefined)
       return staleRef === undefined ? { kind: "none" } : { kind: "none", staleRef };
     if (strictness === "strict" && elements.length > 1)
-      return {
-        kind: "strict",
-        message: injected.strictModeViolationError(chunk, elements).message
-      };
+      return strictViolation(world, chunk, elements);
+    return { kind: "one", element: first, count: elements.length };
+  }
+  var SDK_LANGUAGE = "javascript";
+  function strictViolation(world, chunk, elements) {
+    const { injected } = world;
+    const listed = elements.slice(0, 10);
+    return {
+      kind: "strict",
+      message: injected.strictModeViolationError(chunk, elements).message,
+      listing: {
+        locator: asLocator(SDK_LANGUAGE, stringifySelector(chunk)),
+        count: elements.length,
+        pins: world.pins.addAll(listed),
+        items: listed.map((element) => ({
+          preview: injected.previewNode(element),
+          aka: asLocator(SDK_LANGUAGE, injected.generateSelectorSimple(element))
+        }))
+      }
+    };
+  }
+  function resolvedSet(world, set, strictness) {
+    const elements = [];
+    for (const member of set.members) {
+      const element = setMember(world, member);
+      if (!element)
+        return { kind: "detached" };
+      elements.push(element);
+    }
+    const [first] = elements;
+    if (first === undefined)
+      return set.staleRef === undefined ? { kind: "none" } : { kind: "none", staleRef: set.staleRef };
+    if (strictness === "strict" && elements.length > 1)
+      throw new ProbeError("internal", `a strict set holds ${elements.length} elements; Rust decides strict mode`);
     return { kind: "one", element: first, count: elements.length };
   }
   function resolutionOf(world, found) {
@@ -8867,6 +7478,10 @@ ${value.stack}`;
         closedRoots.set(host, root);
     }
   }
+  function openClosedRootsOf(_world, _request, _root, nodes) {
+    openClosedRoots(nodes);
+    return { kind: "value", value: null };
+  }
 
   // crates/neo-sdk/neo-playwright-js/src/probe/cover.ts
   var DIALOG_ROLES = new Set([
@@ -8972,7 +7587,7 @@ ${value.stack}`;
       busy: saysLoading(root)
     };
   }
-  function cover(world, request, root, _nodes, output, aria = coverAriaFor(world)) {
+  function cover(world, request, root, _nodes, output) {
     const found = resolveTarget(world, request.target, "firstMatch", root);
     if (found.kind !== "one")
       return found;
@@ -8987,50 +7602,48 @@ ${value.stack}`;
       return { kind: "cover", facts: null };
     return {
       kind: "cover",
-      facts: factsOf2(world, output, subject, chain, top, request, aria)
+      facts: factsOf2(world, output, subject, chain, top, request)
     };
   }
-  function factsOf2(world, output, subject, chain, top, request, aria) {
-    const kind = kindOf(world, subject, chain, request.point, request.above, aria);
-    const layer = whichDialog(world, chain, top, request.point, aria);
-    const { shown, behind, closed } = shownLayer(world, output, layer, request.point, subject, aria);
+  function factsOf2(world, output, subject, chain, top, request) {
+    const kind = kindOf(subject, chain, request.point, request.above);
+    const layer = whichDialog(chain, top, request.point);
+    const { shown, behind, closed } = shownLayer(world, output, layer, request.point, subject);
     const surrounds = shown.contains(subject) || shown === document.body;
-    let snapshot = null;
-    let words = true;
-    if (!surrounds) {
-      const coverTree = output.tree(shown, () => aria.coverSnapshot(shown));
-      snapshot = coverTree.json;
-      words = coverTree.hasWords;
-    }
     const taking = surrounds ? [] : takingControls(world, shown);
-    const controls = controlsOf(world, output, shown, taking, aria);
-    const drawn = words ? undefined : output.tree(shown, () => Array.from(renderedText(shown).trim()));
+    const controls = listedControls(world, shown, taking);
+    const words = surrounds || output.tree(shown, () => holdsWords(world, shown));
+    const drawn = surrounds ? [] : output.tree(shown, () => Array.from(renderedText(shown).trim()));
+    const finalKind = frameKind(shown, kind, taking);
+    const labelled = finalKind.is === "labels" ? [finalKind.control] : [];
+    const named = [...new Set([shown, ...controls, ...labelled])];
+    const pinned = world.pins.addAll(named);
+    const pinOf = new Map(named.map((element, at) => [element, pinned[at] ?? 0]));
+    const pin = (element) => pinOf.get(element) ?? 0;
     return {
       layer: coverNumber(layer),
-      ref: aria.refOf(shown),
-      role: controlRole(world, shown, aria),
-      name: nameOf(world, output, shown, aria),
+      pin: pin(shown),
       markup: output.previewNode(behind ? layer : shown),
-      snapshot,
-      ...drawn && drawn.length > 0 ? { text: drawn.slice(0, MAX_TEXT).join("") } : {},
-      controls,
-      blank: !isFrame(shown) && !closed && controls.length === 0 && !words && !drawn?.length,
+      ...drawn.length > 0 ? { text: drawn.slice(0, MAX_TEXT).join("") } : {},
+      controls: controls.map(pin),
+      surrounds,
+      blank: !isFrame(shown) && !closed && controls.length === 0 && !words,
       behind,
       closed,
-      notice: !surrounds && inLiveRegion(shown, aria),
-      kind: frameKind(shown, kind, taking)
+      notice: !surrounds && inLiveRegion(shown),
+      kind: finalKind.is === "labels" ? { is: "labels", pin: pin(finalKind.control) } : finalKind
     };
   }
-  function shownAs(world, output, layer, point, subject, aria = coverAriaFor(world)) {
-    return shownLayer(world, output, layer, point, subject, aria).shown;
+  function shownAs(world, output, layer, point, subject) {
+    return shownLayer(world, output, layer, point, subject).shown;
   }
-  function shownLayer(world, output, layer, point, subject, aria) {
+  function shownLayer(world, output, layer, point, subject) {
     const holds = subject ? layer.contains(subject) || layer === world.injected.document.body : pageElement(layer);
     const closed = subject ? !layer.contains(subject) && inClosedPart(layer) : !holds && inClosedPart(layer);
     if (holds || closed)
       return { shown: layer, behind: false, closed };
-    const blank = isBlank(world, output, layer, aria);
-    const shown = (blank ? dialogBehind(world, layer, point, aria) : soleDialog(world, layer, aria)) ?? layer;
+    const blank = isBlank(world, output, layer);
+    const shown = (blank ? dialogBehind(world, layer, point) : soleDialog(world, layer)) ?? layer;
     return { shown, behind: blank && shown !== layer, closed };
   }
   function isFrame(element) {
@@ -9046,15 +7659,18 @@ ${value.stack}`;
       return { is: "frame", inside: true };
     return kind.is === "frame" && frames.length < taking.length ? { is: "page" } : kind;
   }
-  function whichDialog(world, chain, top, point, aria = coverAriaFor(world)) {
+  function whichDialog(chain, top, point) {
     const path = coverPath(chain, top, point);
     const main = top.ownerDocument.querySelector('main, [role="main"]');
     const named = path.filter((at) => !pageElement(at, main));
     const face = coverFace(named);
     return named.find((at) => {
-      const role = aria.roleOf(at) ?? "";
+      const role = roleOf(at);
       return DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role);
-    }) ?? face ?? named.find((at) => SECTION_ROLES.has(aria.roleOf(at) ?? "")) ?? (pageElement(top, main) ? path[0] ?? top : top);
+    }) ?? face ?? named.find((at) => SECTION_ROLES.has(roleOf(at))) ?? (pageElement(top, main) ? path[0] ?? top : top);
+  }
+  function roleOf(element) {
+    return computeAriaRole(element) ?? "";
   }
   function coverPath(chain, top, point) {
     const [hit] = chain;
@@ -9083,10 +7699,16 @@ ${value.stack}`;
     const outermostFixed = named.findLastIndex((at) => getComputedStyle(at).position === "fixed" || inTopLayer(at));
     return outermostFixed < 0 ? undefined : named.slice(0, outermostFixed + 1).findLast(takesPointer);
   }
-  function isBlank(world, output, element, aria = coverAriaFor(world)) {
-    return !isFrame(element) && takingControls(world, element).length === 0 && !output.tree(element, () => aria.coverSnapshot(element).hasWords);
+  function isBlank(world, output, element) {
+    return !isFrame(element) && takingControls(world, element).length === 0 && !output.tree(element, () => holdsWords(world, element));
   }
-  function dialogBehind(world, backdrop, point, aria = coverAriaFor(world)) {
+  var WORD_ATTRIBUTES = ["aria-label", "title", "alt"];
+  function holdsWords(world, element) {
+    const { utils } = world.injected;
+    const blank = (text) => (text ?? "").trim() === "";
+    return [element, ...composedDescendants(element)].some((at) => (at === element || at.parentNode?.nodeType === 11) && !blank(renderedText(at)) || WORD_ATTRIBUTES.some((name) => !blank(at.getAttribute(name))) && utils.isElementVisible(at));
+  }
+  function dialogBehind(world, backdrop, point) {
     const { injected } = world;
     const document2 = backdrop.ownerDocument;
     const candidates = [
@@ -9099,8 +7721,7 @@ ${value.stack}`;
         continue;
       if (!injected.utils.isElementVisible(candidate))
         continue;
-      const role = aria.roleOf(candidate) ?? "";
-      if (!DIALOG_ROLES.has(role) && !inTopLayer(candidate))
+      if (!DIALOG_ROLES.has(roleOf(candidate)) && !inTopLayer(candidate))
         continue;
       if (!standsOn(candidate, backdrop))
         continue;
@@ -9118,9 +7739,9 @@ ${value.stack}`;
   function takesPointer(element) {
     return getComputedStyle(element).pointerEvents !== "none";
   }
-  function inLiveRegion(cover, aria) {
+  function inLiveRegion(cover) {
     for (let at = cover;at; at = at.assignedSlot ?? parentOrHost2(at)) {
-      if (NOTICE_ROLES.has(aria.roleOf(at) ?? ""))
+      if (NOTICE_ROLES.has(roleOf(at)))
         return true;
       const live = at.getAttribute("aria-live");
       if (live !== null && live !== "off")
@@ -9207,9 +7828,6 @@ ${value.stack}`;
       return false;
     }
   }
-  function nameOf(world, output, element, aria = coverAriaFor(world)) {
-    return output.tree(element, () => aria.nameOf(element));
-  }
   var CONTROL_ROLES = new Set([
     "button",
     "link",
@@ -9224,15 +7842,15 @@ ${value.stack}`;
     const [role] = (element.getAttribute("role") ?? "").trim().split(/\s+/);
     return CONTROL_ROLES.has(role ?? "");
   }
-  function soleDialog(world, cover, aria) {
+  function soleDialog(world, cover) {
     const { utils } = world.injected;
-    const role = aria.roleOf(cover) ?? "";
+    const role = roleOf(cover);
     if (DIALOG_ROLES.has(role) || NOTICE_ROLES.has(role))
       return;
-    if (aria.nameOf(cover).trim() !== "")
+    if (labelOf(cover) !== "")
       return;
     const dialogs = composedDescendants(cover).filter((element) => {
-      const its = aria.roleOf(element);
+      const its = roleOf(element);
       return (its === "dialog" || its === "alertdialog") && utils.isElementVisible(element);
     });
     return dialogs.length === 1 ? dialogs[0] : undefined;
@@ -9240,12 +7858,6 @@ ${value.stack}`;
   var NATIVE_CONTROLS = "input, textarea, select, button, a[href], iframe, frame, [contenteditable]";
   function coverControl(element) {
     return element.matches(NATIVE_CONTROLS) || explicitControl(element);
-  }
-  function controlRole(world, control, aria = coverAriaFor(world)) {
-    if (isFrame(control))
-      return "iframe";
-    const role = aria.roleOf(control);
-    return !role || role === "presentation" || role === "none" ? "generic" : role;
   }
   function takingControls(world, shown) {
     const { injected } = world;
@@ -9260,8 +7872,8 @@ ${value.stack}`;
       return !inView || hitChain(control, middle) === null;
     });
   }
-  function listedControls(world, shown, taking = takingControls(world, shown), aria = coverAriaFor(world)) {
-    const kept = new Set(taking.filter((control) => controlRole(world, control, aria) === "button").slice(0, MAX_CONTROLS));
+  function listedControls(world, shown, taking = takingControls(world, shown)) {
+    const kept = new Set(taking.filter((control) => roleOf(control) === "button").slice(0, MAX_CONTROLS));
     for (const control of taking) {
       if (kept.size >= MAX_CONTROLS)
         break;
@@ -9269,14 +7881,7 @@ ${value.stack}`;
     }
     return taking.filter((control) => kept.has(control));
   }
-  function controlsOf(world, output, shown, taking = takingControls(world, shown), aria = coverAriaFor(world)) {
-    return listedControls(world, shown, taking, aria).map((control) => ({
-      role: controlRole(world, control, aria),
-      name: nameOf(world, output, control, aria),
-      ref: aria.refOf(control)
-    }));
-  }
-  function kindOf(world, subject, chain, point, above, aria = coverAriaFor(world)) {
+  function kindOf(subject, chain, point, above) {
     const onTop = chain[0];
     if (!onTop)
       return { is: "nothing" };
@@ -9291,9 +7896,9 @@ ${value.stack}`;
       return labelKind(label);
     const labelled = labelledControl(subject, onTop);
     if (labelled)
-      return { is: "labels", ref: aria.refOf(labelled) };
+      return { is: "labels", control: labelled };
     const parent = parentOrHost2(subject);
-    if (onTop === parent || parent && onTop === parentOrHost2(parent) || drawingOf(world, subject, onTop, false, aria) !== null)
+    if (onTop === parent || parent && onTop === parentOrHost2(parent) || drawingOf(subject, onTop, false) !== null)
       return { is: "wrapper" };
     if (onTop.contains(subject) || onTop === document.documentElement)
       return { is: "nothing" };
@@ -9330,12 +7935,12 @@ ${value.stack}`;
     "menuitem",
     "option"
   ]);
-  function ownPress(world, output, target, point, allowed, aria = coverAriaFor(world)) {
+  function ownPress(world, output, target, point, allowed) {
     const chain = hitChain(target, point);
     const onTop = chain?.[0];
     if (!chain || !onTop)
       return;
-    const kind = kindOf(world, target, chain, point, false, aria);
+    const kind = kindOf(target, chain, point, false);
     if (kind.is === "label") {
       const label = ownLabel(target, onTop);
       if (!label)
@@ -9357,7 +7962,7 @@ ${value.stack}`;
       for (let at = onTop.parentElement;at && !at.contains(target); at = at.parentElement)
         if (!plainElement(at))
           return;
-      const checked = checkedState(world, target, aria);
+      const checked = checkedState(world, target);
       if (checked === undefined)
         return;
       return {
@@ -9367,8 +7972,7 @@ ${value.stack}`;
       };
     }
     if (kind.is === "partial") {
-      const role = aria.roleOf(target) ?? "";
-      if (!POINT_ROLES.has(role) && target.localName !== "summary")
+      if (!POINT_ROLES.has(roleOf(target)) && target.localName !== "summary")
         return;
       return {
         element: target,
@@ -9411,8 +8015,8 @@ ${value.stack}`;
     const position = pointOffLinks(label);
     return position && positionPoint(label, position).point;
   }
-  function checkedState(world, control, aria) {
-    const role = aria.roleOf(control) ?? "";
+  function checkedState(world, control) {
+    const role = roleOf(control);
     if (role !== "checkbox" && role !== "radio" && role !== "switch")
       return;
     try {
@@ -9990,43 +8594,6 @@ ${value.stack}`;
     return node.nodeType === 1;
   }
 
-  // crates/neo-sdk/neo-playwright-js/src/probe/snapshot-aria.ts
-  var providers2 = new WeakMap;
-  function snapshotAriaFor(world) {
-    let provider = providers2.get(world);
-    if (!provider) {
-      provider = createEngineSnapshotAria(world);
-      providers2.set(world, provider);
-    }
-    return provider;
-  }
-  function createEngineSnapshotAria(world) {
-    const base = coverAriaFor(world);
-    return {
-      ...base,
-      surveyElements() {
-        const refs = lastSnapshotRefs(world.injected);
-        return {
-          *[Symbol.iterator]() {
-            for (const { element } of refs.values())
-              yield element;
-          }
-        };
-      },
-      snapshotRefs() {
-        const refs = lastSnapshotRefs(world.injected);
-        return {
-          elementFor: (ref) => refs.get(ref)?.element,
-          *elements() {
-            for (const { element } of refs.values())
-              yield element;
-          }
-        };
-      },
-      snapshotNodes: (json) => lastSnapshotNodes(world.injected, json).nodes
-    };
-  }
-
   // crates/neo-sdk/neo-playwright-js/src/probe/cover-survey.ts
   var MAX_CONTROLS2 = 300;
   var BUDGET_MS = 20;
@@ -10042,33 +8609,10 @@ ${value.stack}`;
     "log"
   ]);
   var memory = new WeakMap;
-  function surveyCovers(world, output, json, aria = snapshotAriaFor(world)) {
-    const { layers, tested, phases } = surveyLayers(world, output, aria.surveyElements(), aria, {
-      controls: (root) => controlsOf(world, output, root, undefined, aria),
-      same: (control) => control.ref,
-      named: (element) => ({
-        role: controlRole(world, element, aria),
-        name: nameOf(world, output, element, aria),
-        ref: aria.refOf(element)
-      })
-    });
-    const marksSkipped = markBlocks(json, layers, inside, phases, aria);
-    return {
-      layers: layers.map(({ note }) => note),
-      tested,
-      marksSkipped,
-      phases
-    };
-  }
   function coverSurvey(world, _request, _root, _nodes, output) {
-    const aria = snapshotAriaFor(world);
     const started = performance.now();
     const population = pageControls(world, started + BUDGET_MS);
-    const { layers, tested, phases } = surveyLayers(world, output, population.controls, aria, {
-      controls: (root) => listedControls(world, root, undefined, aria),
-      same: (control) => control,
-      named: (element) => ({ named: element })
-    }, started);
+    const { layers, tested, phases } = surveyLayers(world, output, population.controls, started);
     phases.stopped ||= population.stopped;
     const holdersOf = ({ held, note }) => note.wholeView && !note.blank ? held : [];
     const named = [
@@ -10123,7 +8667,7 @@ ${value.stack}`;
         return true;
     return false;
   }
-  function surveyLayers(world, output, elements, aria, wording, started = performance.now()) {
+  function surveyLayers(world, output, elements, started) {
     const { injected } = world;
     const document2 = injected.document;
     const phases = {
@@ -10138,11 +8682,11 @@ ${value.stack}`;
       point,
       hit: hitAtRoots([document2], point)
     }));
-    const { hits, tested, main } = findFaces(world, elements, samples, started, phases, aria);
+    const { hits, tested, main } = findFaces(world, elements, samples, started, phases);
     phases.hits = performance.now() - started;
-    const page = pageGuard(elements, phases, main, aria);
+    const page = pageGuard(elements, phases, main);
     const resolving = performance.now();
-    const found = facesFromHits(world, hits, page, aria);
+    const found = facesFromHits(hits, page);
     if (hits.length)
       phases.naming += Math.max(0, performance.now() - resolving - phases.count);
     const remembered = memory.get(document2) ?? [];
@@ -10164,19 +8708,19 @@ ${value.stack}`;
     phases.count = 0;
     const centre = { x: innerWidth / 2, y: innerHeight / 2 };
     for (const face of found.values())
-      face.named = shownAs(world, output, face.named, centre, undefined, aria);
+      face.named = shownAs(world, output, face.named, centre);
     const groups = joinFaces(found, inside).map((faces) => ({
       faces,
       ...holdersOf(faces, inside, page)
     }));
     const next = [];
-    const layers = groups.map((group) => describeLayer(world, output, group, groups, remembered, next, tested, samples, inside, aria, wording)).filter((layer) => layer !== undefined).sort((a, b) => Number(b.note.wholeView) - Number(a.note.wholeView) || a.order - b.order).slice(0, MAX_LAYERS);
+    const layers = groups.map((group) => describeLayer(world, output, group, groups, remembered, next, tested, samples, inside)).filter((layer) => layer !== undefined).sort((a, b) => Number(b.note.wholeView) - Number(a.note.wholeView) || a.order - b.order).slice(0, MAX_LAYERS);
     memory.set(document2, next);
     phases.naming += Math.max(0, performance.now() - naming - phases.count);
     phases.count += countedBeforeNaming;
     return { layers, tested: tested.length, phases };
   }
-  function findFaces(world, elements, samples, started, phases, aria) {
+  function findFaces(world, elements, samples, started, phases) {
     const main = world.injected.document.querySelector('main, [role="main"]');
     const hits = [];
     const tested = [];
@@ -10203,7 +8747,7 @@ ${value.stack}`;
         continue;
       const subject = world.injected.retarget(element, "button-link") ?? element;
       const chain = hitChain(subject, point);
-      const kind = chain ? kindOf(world, subject, chain, point, false, aria).is : "nothing";
+      const kind = chain ? kindOf(subject, chain, point, false).is : "nothing";
       const covered = kind === "page" || kind === "frame";
       tested.push({ element, clear: !covered });
       if (chain && covered)
@@ -10219,7 +8763,7 @@ ${value.stack}`;
       hits.push({ path: filtered, chain, root, point, face, observed, subject });
     return path[0];
   }
-  function facesFromHits(world, hits, page, aria) {
+  function facesFromHits(hits, page) {
     const found = new Map;
     for (const hit of hits) {
       if (!hit.observed)
@@ -10242,7 +8786,7 @@ ${value.stack}`;
           known.roots.add(root);
         continue;
       }
-      const named = whichDialog(world, hit.chain, root, hit.point, aria);
+      const named = whichDialog(hit.chain, root, hit.point);
       found.set(element, {
         element,
         named: page(named) ? element : named,
@@ -10252,14 +8796,14 @@ ${value.stack}`;
     }
     return found;
   }
-  function pageGuard(elements, phases, main, aria) {
+  function pageGuard(elements, phases, main) {
     let controls;
     const cached = new Map;
     const meanings = new Map;
     const meaning = (element) => {
       let known = meanings.get(element);
       if (!known) {
-        const role = aria.roleOf(element) ?? "";
+        const role = roleOf(element);
         const top = inTopLayer(element);
         known = {
           dialog: role === "dialog" || role === "alertdialog" || top,
@@ -10363,9 +8907,9 @@ ${value.stack}`;
     }
     return { held, controlsFrom };
   }
-  function describeLayer(world, output, group, groups, remembered, next, tested, samples, inside, aria, wording) {
+  function describeLayer(world, output, group, groups, remembered, next, tested, samples, inside) {
     const { faces, held, controlsFrom } = group;
-    const face = faces.find((face) => isBlank(world, output, face.element, aria)) ?? faces[0];
+    const face = faces.find((face) => isBlank(world, output, face.element)) ?? faces[0];
     if (!face)
       return;
     const old = remembered.find((entry) => faces.some((face) => entry.face.deref() === face.element));
@@ -10374,9 +8918,11 @@ ${value.stack}`;
     const belongs = (element) => held.some((root) => inside(root, element));
     const ownOfAny = (element) => groups.some(({ held }) => held.some((root) => inside(root, element)));
     const wholeView = samples.every(({ deepest }) => deepest && belongs(deepest)) && tested.every(({ element, clear }) => !clear || ownOfAny(element)) && tested.some(({ element, clear }) => !clear && !belongs(element));
-    const controls = Array.from(new Map(controlsFrom.flatMap((root) => wording.controls(root)).map((control) => [wording.same(control), control])).values());
+    const controls = [
+      ...new Set(controlsFrom.flatMap((root) => listedControls(world, root)))
+    ];
     const words = output.tree(named, () => renderedText(named).trim().replace(/\s+/g, " "));
-    const blank = !inClosedPart(named) && controls.length === 0 && !words && isBlank(world, output, named, aria);
+    const blank = !inClosedPart(named) && controls.length === 0 && !words && isBlank(world, output, named);
     for (const member of faces)
       next.push({
         face: new WeakRef(member.element),
@@ -10388,7 +8934,7 @@ ${value.stack}`;
       order,
       held,
       note: {
-        ...wording.named(named),
+        named,
         blank,
         loading: controlsFrom.some(saysLoading),
         wholeView,
@@ -10396,36 +8942,6 @@ ${value.stack}`;
         ...words ? { firstWords: Array.from(words).slice(0, 61).join("") } : {}
       }
     };
-  }
-  function markBlocks(json, layers, inside, phases, aria) {
-    if (!layers.some(({ note }) => note.wholeView && !note.blank))
-      return false;
-    const started = performance.now();
-    let nodes;
-    try {
-      nodes = aria.snapshotNodes(json);
-    } catch {
-      phases.linking = performance.now() - started;
-      return true;
-    }
-    phases.linking = performance.now() - started;
-    const marking = performance.now();
-    const pending = [...json];
-    while (pending.length) {
-      const node = pending.pop();
-      if (!node)
-        continue;
-      const element = nodes.get(node);
-      const layer = element && layers.find(({ held, note }) => note.wholeView && !note.blank && held.some((root) => inside(root, element)));
-      if (layer) {
-        node.onTop = layer.note.ref;
-      } else
-        for (const child of node.children ?? [])
-          if (typeof child !== "string")
-            pending.push(child);
-    }
-    phases.marks = performance.now() - marking;
-    return false;
   }
   function middle(element) {
     const box = element.getBoundingClientRect();
@@ -10672,13 +9188,7 @@ ${value.stack}`;
     const { element } = found;
     const resolved = world.injected.previewNode(element);
     const check = await output.check(element, params, request.frameVisible);
-    const reply = poll(check, resolved);
-    if (check.matches === params.isNot) {
-      const ariaSnapshot = output.tree(element, () => expectFailureSnapshot(world.injected, element, params, request.frameVisible));
-      if (ariaSnapshot !== undefined)
-        reply.ariaSnapshot = ariaSnapshot;
-    }
-    return reply;
+    return poll(check, resolved);
   }
   function poll(check, resolved) {
     return {
@@ -11230,7 +9740,7 @@ ${value.stack}`;
   var SNAPSHOT_DEPTH_ERROR = "This tree is nested about {levels} levels deep, more than a snapshot carries (about 147). Pass { depth: n } with n of 140 or less to cut it there, or take a locator's snapshot of a smaller section.";
 
   // crates/neo-sdk/neo-playwright-js/src/probe/protocol.ts
-  var PROTOCOL = 54;
+  var PROTOCOL = 56;
 
   // crates/neo-sdk/neo-playwright-js/src/probe/read.ts
   var XHTML2 = "http://www.w3.org/1999/xhtml";
@@ -11265,9 +9775,17 @@ ${value.stack}`;
         return (world, element) => located(world, request, element, root);
       case "checkable":
         return (world, element) => checkable(world, element);
+      case "validityInvalid":
+        return (_world, element) => validityInvalid(element);
       case "fileInput":
         return (world, element) => fileInput(world, element, read);
     }
+  }
+  function validityInvalid(element) {
+    if (!("validity" in element))
+      return false;
+    const validity = element.validity;
+    return validity?.valid === false;
   }
   function fileInput(world, element, read) {
     const { injected } = world;
@@ -11502,6 +10020,31 @@ ${value.stack}`;
     return { kind: "value", value: null };
   }
 
+  // crates/neo-sdk/neo-playwright-js/src/probe/snapshot-aria.ts
+  var providers = new WeakMap;
+  function snapshotAriaFor(world) {
+    let provider = providers.get(world);
+    if (!provider) {
+      provider = createEngineSnapshotAria(world);
+      providers.set(world, provider);
+    }
+    return provider;
+  }
+  function createEngineSnapshotAria(world) {
+    return {
+      snapshotRefs() {
+        const refs = lastSnapshotRefs(world.injected);
+        return {
+          elementFor: (ref) => refs.get(ref)?.element,
+          *elements() {
+            for (const { element } of refs.values())
+              yield element;
+          }
+        };
+      }
+    };
+  }
+
   // crates/neo-sdk/neo-playwright-js/src/probe/snapshot-inert.ts
   function parent(element) {
     if (element.assignedSlot)
@@ -11656,15 +10199,6 @@ ${value.stack}`;
     const minted = request.mode === "ai" ? lastSnapshotRefs(injected) : undefined;
     if (minted)
       world.refs.remember(minted);
-    let survey;
-    let surveyFailed = false;
-    if (request.surveyCovers && request.mode === "ai" && output.neoSnapshot) {
-      try {
-        survey = surveyCovers(world, output, json);
-      } catch {
-        surveyFailed = true;
-      }
-    }
     const iframes = [];
     if (minted) {
       for (const ref of iframeRefs) {
@@ -11677,13 +10211,6 @@ ${value.stack}`;
     }
     return {
       kind: "snapshot",
-      ...survey ? {
-        onTop: survey.layers,
-        surveyTested: survey.tested,
-        surveyMs: survey.phases.hits,
-        surveyPhases: survey.phases
-      } : {},
-      ...surveyFailed || survey?.marksSkipped ? { onTopSkipped: true } : {},
       ...inertMarkingMs === undefined ? {} : { inertMarkingMs },
       json,
       iframes,
@@ -11708,7 +10235,7 @@ ${value.stack}`;
   var FROM = "internal:neo-from";
   var BELOW = "internal:neo-below";
   var INSIDE = "internal:neo-inside";
-  var SDK_LANGUAGE = "javascript";
+  var SDK_LANGUAGE2 = "javascript";
   function held(world, member, nodes) {
     const { document: document2 } = world.injected;
     if (member === "document")
@@ -11788,10 +10315,7 @@ ${value.stack}`;
         engines.delete(name);
     }
     if (request.strict && elements.length > 1)
-      return {
-        kind: "strict",
-        message: injected.strictModeViolationError(request.strict, elements).message
-      };
+      return strictViolation(world, request.strict, elements);
     const [staleRef] = reached;
     return {
       kind: "staged",
@@ -11827,11 +10351,11 @@ ${value.stack}`;
     const [first] = elements;
     const items = first ? output.tree(first, () => elements.map((element) => ({
       preview: injected.previewNode(element),
-      aka: asLocator(SDK_LANGUAGE, injected.generateSelectorSimple(element))
+      aka: asLocator(SDK_LANGUAGE2, injected.generateSelectorSimple(element))
     }))) : [];
     return {
       kind: "pinsDescribed",
-      ...request.chunk ? { locator: asLocator(SDK_LANGUAGE, stringifySelector(request.chunk)) } : {},
+      ...request.chunk ? { locator: asLocator(SDK_LANGUAGE2, stringifySelector(request.chunk)) } : {},
       items
     };
   }
@@ -12076,7 +10600,8 @@ ${value.stack}`;
     stage,
     describePins,
     coverSurvey,
-    privateMarks
+    privateMarks,
+    openClosedRoots: openClosedRootsOf
   };
   var UNINSTALLED = { kind: "uninstalled" };
   function described2(world) {

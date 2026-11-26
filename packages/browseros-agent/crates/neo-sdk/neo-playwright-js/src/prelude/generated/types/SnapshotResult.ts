@@ -17,8 +17,8 @@ import type { Unmarked } from "./Unmarked";
  * }
  * ```
  *
- * `json` is upstream's `AriaSnapshotJSON` with every frame stitched in and the name rule
- * applied. The prelude renders it, as upstream's YAML (the vendored `renderAriaSnapshotAsYaml`)
+ * `json` is upstream's `AriaSnapshotJSON` with every frame in place and the name rule applied.
+ * The prelude renders it, as upstream's YAML (the vendored `renderAriaSnapshotAsYaml`)
  * or as the condensed v1 text (`prelude/snapshot-v1.ts`), and adds a `# partial` line under each
  * partial iframe. `tests/data/snapshot-output.json` is one recorded from real frames.
  *
@@ -26,10 +26,8 @@ import type { Unmarked } from "./Unmarked";
  * the tree, which the prelude hands back with the rendered text so the delta baseline is only
  * ever stored for the document it was read from (`snapshot_baselines.rs`).
  *
- * `closedRoots` is there only when clickable marking found elements inside closed shadow roots
- * that it could not hand a probe, so some closed roots may be unread; the prelude prints
- * `# partial: closed shadow roots not all read (<sent> of <found>)` at the top of the v1 text
- * and of `mode: 'full'`.
+ * `unmarked` and `closedRoots` are never set by the tree, which reads clickability and closed
+ * shadow roots itself; the prelude still prints their notices when a producer sets them.
  */
 export type SnapshotResult = { json: import('../../vendored').AriaSnapshotJSON, partial: Array<PartialFrame>, 
 /**
