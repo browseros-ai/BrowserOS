@@ -27,7 +27,15 @@ permissions:
   contents: read
 
 env:
-  BROWSEROS_APPIMAGE_URL: https://files.browseros.com/download/BrowserOS.AppImage
+  # The desktop BrowserOS every browser suite runs on, pinned to one versioned build by URL and
+  # sha256, as packages/browseros-agent/crates/neo-sdk/neo-server/docker/browser.lock pins Neo.
+  # The build must carry the APC contract that the Rust snapshot engine requires: the public
+  # download alias (download/BrowserOS.AppImage) still serves 0.51.0, which predates it. Bump
+  # the three lines together from releases/browseros/<version>/linux/release.json. R2 objects
+  # can be overwritten, so the sha256 check, not the URL, is what holds the pin.
+  BROWSEROS_APPIMAGE_VERSION: 0.53.0.2
+  BROWSEROS_APPIMAGE_URL: https://cdn.browseros.com/releases/browseros/0.53.0.2/linux/BrowserOS_v0.53.0.2_x64.AppImage
+  BROWSEROS_APPIMAGE_SHA256: ca783a838111277e874589f72cd6ecb882f4b61f829224292bf0cf7664bd1e8b
 
 concurrency:
   group: tests-${{ github.event.pull_request.number || github.ref }}
@@ -129,35 +137,31 @@ jobs:
         if: matrix.suite == 'claw-sdk-quality'
         run: python3 -m unittest discover -s tools/remote-builds -p 'test_*.py' -v
 
-      - name: Resolve BrowserOS cache key
-        if: matrix.needs_browser == true
-        id: browseros-cache-key
-        run: |
-          set -euo pipefail
-          headers="$(curl -fsSI "$BROWSEROS_APPIMAGE_URL")"
-          etag="$(printf '%s\n' "$headers" | awk 'BEGIN{IGNORECASE=1} /^etag:/ {sub(/\r$/, "", $2); gsub(/"/, "", $2); print $2; exit}')"
-          last_modified="$(printf '%s\n' "$headers" | awk 'BEGIN{IGNORECASE=1} /^last-modified:/ {$1=""; sub(/^ /, ""); sub(/\r$/, ""); print; exit}')"
-          raw_key="${etag:-$last_modified}"
-          if [ -z "$raw_key" ]; then
-            raw_key="$BROWSEROS_APPIMAGE_URL"
-          fi
-          cache_key="$(printf '%s' "$raw_key" | shasum -a 256 | awk '{print $1}')"
-          echo "key=browseros-appimage-${{ runner.os }}-$cache_key" >> "$GITHUB_OUTPUT"
-
       - name: Restore BrowserOS cache
         if: matrix.needs_browser == true
         id: browseros-cache
         uses: actions/cache@v6.1.0
         with:
           path: packages/browseros-agent/.ci/bin/BrowserOS.AppImage
-          key: ${{ steps.browseros-cache-key.outputs.key }}
+          # The pinned sha256 names these exact bytes, so it is the whole cache identity.
+          key: browseros-appimage-${{ runner.os }}-${{ env.BROWSEROS_APPIMAGE_SHA256 }}
 
       - name: Download BrowserOS
         if: matrix.needs_browser == true && steps.browseros-cache.outputs.cache-hit != 'true'
         run: |
+          set -euo pipefail
           mkdir -p .ci/bin
-          curl -fsSL "$BROWSEROS_APPIMAGE_URL" -o .ci/bin/BrowserOS.AppImage
+          curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 --max-time 300 \
+            -o .ci/bin/BrowserOS.AppImage "$BROWSEROS_APPIMAGE_URL"
           chmod +x .ci/bin/BrowserOS.AppImage
+
+      # Runs on a cache hit too, so no suite starts on bytes other than the pinned build's.
+      - name: Verify BrowserOS
+        if: matrix.needs_browser == true
+        run: |
+          set -euo pipefail
+          echo "$BROWSEROS_APPIMAGE_SHA256  .ci/bin/BrowserOS.AppImage" | sha256sum -c -
+          echo "BrowserOS $BROWSEROS_APPIMAGE_VERSION: $BROWSEROS_APPIMAGE_URL"
 
       - name: Prepare BrowserOS wrapper
         if: matrix.needs_browser == true
