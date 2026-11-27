@@ -1,6 +1,7 @@
 //! `ChunkPlan` over chunks the real prelude builds: how parts are classified and cut into maximal
 //! runs, the page form of a run at every depth, the capture rewrite, the lazy nth-with-capture
-//! failure, the engine check, and an all-tree chunk selecting as its tree stage does.
+//! failure, the engine check, an all-tree chunk selecting as its tree stage does, and an
+//! `aria-template` leaf that no page form can carry.
 
 #[path = "support/prelude_chunks.rs"]
 #[expect(
@@ -630,13 +631,17 @@ fn a_chunk_with_no_sided_part_runs_as_one_tree_run() -> Result<(), Box<dyn Error
 #[test]
 fn a_chunk_is_page_only_exactly_when_no_tree_leaf_is_in_it() -> Result<(), Box<dyn Error>> {
     let js = Prelude::load()?;
-    let cases: [(&str, bool); 9] = [
+    let cases: [(&str, bool); 10] = [
         ("page.locator('div')", true),
         ("page.locator('internal:text=\"Go\"i')", true),
         ("page.locator('xpath=//li').nth(1)", true),
         ("page.locator('li').filter({ hasText: 'Go' }).nth(1)", true),
         ("page.getByRole('button')", false),
         ("page.locator('aria-ref=e5')", false),
+        (
+            "page.locator('aria-template={\"kind\":\"role\",\"role\":\"list\"}')",
+            false,
+        ),
         (
             "page.locator('#modal').getByRole('button', { name: 'Go' })",
             false,
@@ -651,5 +656,87 @@ fn a_chunk_is_page_only_exactly_when_no_tree_leaf_is_in_it() -> Result<(), Box<d
         let plan = ChunkPlan::of(&js.chunk(selector)?)?;
         assert_eq!(plan.is_page_only(), page_only, "{selector}");
     }
+    Ok(())
+}
+
+/// Every part's engine name in `selector`, nested ones included.
+fn names_at_every_depth(selector: &ParsedSelector) -> Vec<&str> {
+    let mut names = Vec::new();
+    let mut pending: Vec<&ParsedSelector> = vec![selector];
+    while let Some(selector) = pending.pop() {
+        for part in &selector.parts {
+            names.push(part.name.as_str());
+            if let SelectorBody::Nested(nested) = &part.body {
+                pending.push(&nested.parsed);
+            }
+        }
+    }
+    names
+}
+
+/// A template's matches depend on the root it starts from: upstream keeps only the top-most
+/// matches below that root, and the root's own node takes part. So a template leaf cannot be a
+/// candidate the page scopes by containment, as a role leaf is, and wherever a page form would
+/// carry one (a filter the page evaluates, or a tree run from roots the tree has no node for) its
+/// candidate refuses instead, once a root reaches it. The template itself never reaches the page.
+#[test]
+fn a_template_leaf_in_a_page_form_refuses_rather_than_reaching_the_page()
+-> Result<(), Box<dyn Error>> {
+    let js = Prelude::load()?;
+    let template = "aria-template={\"kind\":\"role\",\"role\":\"button\",\"name\":\"Go\"}";
+    let tree = tree()?;
+    let names = tree.name_cache();
+    let refs = Refs::default();
+    let in_page = ChunkPlan::of(&js.chunk(&format!(
+        "page.locator('li').filter({{ has: page.locator('span').locator({}) }})",
+        serde_json::to_string(template)?
+    ))?)?;
+    let alone = ChunkPlan::of(&parsed(&js, template)?)?;
+    assert_eq!(
+        shape(&alone)?,
+        ["tree internal:neo-inside=0<{\"kind\":\"role\",\"role\":\"button\",\"name\":\"Go\"}>"],
+        "a template is a tree leaf, matched over the tree as toMatchAriaSnapshot matches"
+    );
+    let in_page_form = match in_page.stages()?.first() {
+        PlannedStage::Page(form) => form,
+        PlannedStage::Tree(_) => return Err("a has over CSS is the page's".into()),
+    };
+    let fallback = match alone.stages()?.first() {
+        PlannedStage::Tree(run) => run.page_form(),
+        PlannedStage::Page(_) => return Err("a lone template is a tree run".into()),
+    };
+    for (form, why) in [
+        (in_page_form, "inside a filter the page evaluates"),
+        (fallback, "in a tree run's page form"),
+    ] {
+        assert!(
+            !names_at_every_depth(form.selector()).contains(&"aria-template"),
+            "{why}: the page never runs the template: {}",
+            render(form.selector())
+        );
+        let [candidate] = form.candidates() else {
+            return Err(format!("{why}: one candidate for the one leaf").into());
+        };
+        let Err(error) = candidate.select(&tree, document(&tree)?, &names, &refs) else {
+            return Err(format!("{why}: the candidate cannot match as a role leaf does").into());
+        };
+        assert!(
+            error.to_string().starts_with("aria-template"),
+            "{why}: the refusal names the engine: {error}"
+        );
+    }
+    let Scope::Root(root) = document(&tree)? else {
+        return Err("a document scope is a root".into());
+    };
+    let PlannedStage::Tree(run) = alone.stages()?.first() else {
+        return Err("a lone template is a tree run".into());
+    };
+    assert_eq!(
+        run.stage()
+            .select(&tree, Scope::Root(root), &names, &refs)?
+            .nodes(),
+        [node(&tree, 17)?],
+        "over the tree, the same run matches"
+    );
     Ok(())
 }
