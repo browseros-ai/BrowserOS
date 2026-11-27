@@ -657,7 +657,7 @@ describe('the ultrafast page', () => {
       'Your skills keep working, with your agent at normal speed.',
     )
     expect(text()).toContain(
-      'We have been a free tool so far, but this plan helps support future development of BrowserOS neo! 💙',
+      'This plan helps support future development of BrowserOS neo! 💙',
     )
     expect(text()).not.toContain('Thanks for helping')
     await click('What does my plan pay for?')

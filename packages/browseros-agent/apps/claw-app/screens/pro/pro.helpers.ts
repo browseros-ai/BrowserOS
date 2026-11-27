@@ -49,7 +49,7 @@ export const ULTRAFAST_STEPS: readonly UltrafastStep[] = [
 
 /** What a plan pays for, as approved: one line on the plan picker, before buying. */
 export const BACKING_LINE =
-  'We have been a free tool so far, but this plan helps support future development of BrowserOS neo! 💙'
+  'This plan helps support future development of BrowserOS neo! 💙'
 
 /** The same, as thanks, once someone pays or cancels. */
 export const BACKING_THANKS =

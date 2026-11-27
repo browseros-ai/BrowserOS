@@ -89,7 +89,7 @@ export function PricePanel({
 
   const amount = formatPrice(price)
   const trial = trialDays > 0 && price.interval === 'month'
-  // Right under the price terms: on a trial, before the way in with a key.
+  // Without a trial it gets its own line; with one it ends the trial terms.
   const backing = (
     <p className="max-w-[46ch] font-bold text-[14px] text-cyanotype-ink">
       {BACKING_LINE}
@@ -149,9 +149,9 @@ export function PricePanel({
               {formatDate(trialEndFrom(Date.now(), trialDays))}
             </strong>
             , then {amount} a month. Cancel before then and you won’t be
-            charged.
+            charged.{' '}
+            <strong className="text-cyanotype-ink">{BACKING_LINE}</strong>
           </p>
-          {backing}
           {useKey ? <p className="text-[13.5px]">{useKey}</p> : null}
         </>
       ) : (
