@@ -12,8 +12,11 @@ use neo_snapshot_apc::proto::{
     BrowserOsTriState, ClickabilityReason, ContentAttributeType, ContentAttributes, ContentNode,
     DocumentIdentifier, FormControlType, FrameData, Geometry,
 };
+use neo_snapshot_apc::select::{
+    ChunkPlan, ParsedSelector, PlannedStage, RefResolver, Scope, SelectorBody, SelectorPart,
+};
 use neo_snapshot_apc::tree::{
-    ApcBuilder, BuildOptions, DocToken, DomNodeId, FrameBuilder, Hidden, InvalidState,
+    ApcBuilder, BuildOptions, DocId, DocToken, DomNodeId, FrameBuilder, Hidden, InvalidState,
     MIN_CONTRACT_VERSION, NodeBuilder, NodeKey, Role, SnapshotTree, State, TreeNode, TriState,
 };
 
@@ -2039,6 +2042,177 @@ fn hidden_rules_cover_inheritance_visibility_and_ua_shadow() -> Result<(), Box<d
     assert!(
         Hidden::default().receives_pointer_events(),
         "default Hidden must receive pointer events"
+    );
+
+    Ok(())
+}
+
+fn build_own_content_hidden_tree() -> Result<SnapshotTree, Box<dyn Error>> {
+    let root = NodeBuilder::root()
+        .dom_id(1)
+        // Wikipedia shape: <tr hidden="until-found" style="display:block"> (0-height own box,
+        // ContentHidden on the row itself, visible CSS visibility).
+        .child(
+            NodeBuilder::element("table").dom_id(9).child(
+                NodeBuilder::element("tr")
+                    .dom_id(10)
+                    .annotated_role(AnnotatedRole::ContentHidden)
+                    .child(
+                        boxed_element("td")
+                            .dom_id(11)
+                            .child(NodeBuilder::text("skipped cell").dom_id(12)),
+                    ),
+            ),
+        )
+        // Sized element with content-visibility:hidden: keeps both ARIA visibility and box visibility.
+        .child(
+            boxed_element("div")
+                .dom_id(20)
+                .role("row")
+                .annotated_role(AnnotatedRole::ContentHidden)
+                .child(boxed_element("div").dom_id(21).role("cell")),
+        )
+        // Ancestor content-visibility:hidden still hides descendants, with or without own ContentHidden.
+        .child(
+            boxed_element("div")
+                .dom_id(30)
+                .annotated_role(AnnotatedRole::ContentHidden)
+                .child(boxed_element("div").dom_id(31).role("row"))
+                .child(
+                    boxed_element("div")
+                        .dom_id(32)
+                        .role("row")
+                        .annotated_role(AnnotatedRole::ContentHidden),
+                ),
+        )
+        // Closed <details>: ua_shadow slot carries ContentHidden and hides slotted body.
+        .child(
+            boxed_element("details").dom_id(40).child(
+                NodeBuilder::container()
+                    .dom_id(41)
+                    .ua_shadow(true)
+                    .annotated_role(AnnotatedRole::ContentHidden)
+                    .bounding_box(0, 0, 100, 50)
+                    .child(boxed_element("p").dom_id(42)),
+            ),
+        )
+        // Own visibility:hidden or aria-hidden still hides the element itself.
+        .child(
+            boxed_element("div")
+                .dom_id(50)
+                .role("row")
+                .visibility_hidden(true)
+                .annotated_role(AnnotatedRole::ContentHidden),
+        )
+        .child(
+            boxed_element("div")
+                .dom_id(51)
+                .role("row")
+                .aria_hidden(true)
+                .annotated_role(AnnotatedRole::ContentHidden),
+        );
+
+    build_tree(root)
+}
+
+fn select_role_dom_ids(tree: &SnapshotTree, role: &str) -> Result<Vec<i32>, Box<dyn Error>> {
+    struct EmptyRefs;
+    impl RefResolver for EmptyRefs {
+        fn resolve(&self, _body: &str) -> Option<NodeKey> {
+            None
+        }
+    }
+
+    let parsed = ParsedSelector {
+        parts: vec![SelectorPart {
+            name: "internal:role".to_owned(),
+            source: role.to_owned(),
+            body: SelectorBody::Text(role.to_owned()),
+        }],
+        capture: None,
+    };
+    let plan = ChunkPlan::of(&parsed)?;
+    let stages = plan.stages()?;
+    let PlannedStage::Tree(run) = stages.first() else {
+        return Err(format!("expected a single tree stage for internal:role={role}").into());
+    };
+    let scope = Scope::document(tree, DocId::MAIN).ok_or("main doc scope")?;
+    let names = tree.name_cache();
+    let matches = run.stage().select(tree, scope, &names, &EmptyRefs)?;
+    Ok(matches
+        .keys(tree)
+        .flatten()
+        .map(|key| key.node.raw())
+        .collect())
+}
+
+#[test]
+fn own_content_hidden_keeps_element_visible_and_hides_descendants() -> Result<(), Box<dyn Error>> {
+    let tree = build_own_content_hidden_tree()?;
+
+    let wiki_row = node_by_dom(&tree, "doc-main", 10)?;
+    let wiki_cell = node_by_dom(&tree, "doc-main", 11)?;
+    let wiki_text = node_by_dom(&tree, "doc-main", 12)?;
+    assert_eq!(wiki_row.role(), Some(Role::Row));
+    assert!(
+        !wiki_row.hidden().is_hidden_for_aria() && !wiki_row.hidden().is_box_visible(),
+        "0-sized tr with own ContentHidden must stay ARIA-visible and box-invisible"
+    );
+    assert!(wiki_row.hidden().has_own_content_hidden() && wiki_row.hidden().is_content_hidden());
+    assert!(
+        wiki_cell.hidden().is_hidden_for_aria()
+            && !wiki_cell.hidden().is_box_visible()
+            && wiki_cell.hidden().is_content_hidden()
+            && !wiki_cell.hidden().has_own_content_hidden(),
+        "descendant td under own-ContentHidden tr must be ARIA-hidden and box-invisible"
+    );
+    assert!(
+        wiki_text.hidden().is_hidden_for_aria() && !wiki_text.hidden().is_box_visible(),
+        "descendant text under own-ContentHidden tr must be hidden"
+    );
+
+    let sized_row = node_by_dom(&tree, "doc-main", 20)?;
+    let sized_cell = node_by_dom(&tree, "doc-main", 21)?;
+    assert!(
+        !sized_row.hidden().is_hidden_for_aria() && sized_row.hidden().is_box_visible(),
+        "sized element with own ContentHidden keeps its visible principal box"
+    );
+    assert!(
+        sized_cell.hidden().is_hidden_for_aria() && !sized_cell.hidden().is_box_visible(),
+        "child of sized own-ContentHidden element must be hidden"
+    );
+
+    for hidden_row_id in [31, 32] {
+        let row = node_by_dom(&tree, "doc-main", hidden_row_id)?;
+        assert!(
+            row.hidden().is_hidden_for_aria() && !row.hidden().is_box_visible(),
+            "descendant row {hidden_row_id} under ContentHidden ancestor must remain hidden"
+        );
+    }
+
+    let details = node_by_dom(&tree, "doc-main", 40)?;
+    let details_slot = node_by_dom(&tree, "doc-main", 41)?;
+    let details_p = node_by_dom(&tree, "doc-main", 42)?;
+    assert!(!details.hidden().is_hidden_for_aria() && details.hidden().is_box_visible());
+    assert!(details_slot.hidden().is_hidden_for_aria() && !details_slot.hidden().is_box_visible());
+    assert!(
+        details_p.hidden().is_hidden_for_aria() && !details_p.hidden().is_box_visible(),
+        "closed <details> slotted content must stay hidden"
+    );
+
+    let vis_hidden_row = node_by_dom(&tree, "doc-main", 50)?;
+    assert!(
+        vis_hidden_row.hidden().is_hidden_for_aria() && !vis_hidden_row.hidden().is_box_visible()
+    );
+    let aria_hidden_row = node_by_dom(&tree, "doc-main", 51)?;
+    assert!(
+        aria_hidden_row.hidden().is_hidden_for_aria() && aria_hidden_row.hidden().is_box_visible()
+    );
+
+    assert_eq!(
+        select_role_dom_ids(&tree, "row")?,
+        vec![10, 20],
+        "getByRole(\"row\") must match own-ContentHidden rows and exclude inherited/hidden rows"
     );
 
     Ok(())
