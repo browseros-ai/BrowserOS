@@ -322,11 +322,11 @@ impl TreeScript {
     /// refused child is the one out-of-process frame listed.
     fn targets(&self) -> Value {
         let out_of_process = matches!(self.child_frame(), ChildFrame::Hung | ChildFrame::Refused);
-        let hung = out_of_process.then(|| {
+        let child = out_of_process.then(|| {
             json!({ "targetId": SCRIPTED_CHILD, "type": "iframe",
                 "url": "https://a.test/child", "parentFrameId": SCRIPTED_MAIN })
         });
-        json!({ "targetInfos": hung.into_iter().collect::<Vec<_>>() })
+        json!({ "targetInfos": child.into_iter().collect::<Vec<_>>() })
     }
 
     pub(super) fn with_rekey_retired_seq(mut self, retired: u32) -> Self {
