@@ -37,6 +37,7 @@ use serde_json::json;
 
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
+use crate::page::frame_tree::UnreadCause;
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want};
 use crate::resolve::{self, FramePath, FrameStart, Started};
 use crate::target::{AriaRefJump, AriaRefKind, Strictness};
@@ -145,6 +146,9 @@ pub(super) enum EnsuredWorld {
     Gone,
     /// The frame is not in the page any more.
     Missing,
+    /// The page's frame tree could not be read down to the frame ([`Started::Unread`]): it may
+    /// still be there, so nothing about it is proven gone.
+    Unread(UnreadCause),
 }
 
 /// Hydrates APC [`NodeKey`]s and [`AriaRefJump`] refs into live isolated worlds under section 6.2
@@ -205,7 +209,9 @@ impl<'a> Hydrate<'a> {
         let world = match ensure_world(self.page, self.scope, self.tab_tree, frame).await? {
             EnsuredWorld::Ready(world) => world,
             EnsuredWorld::Gone => return Ok(HydrateOutcome::WorldStale),
-            EnsuredWorld::Missing => return Ok(HydrateOutcome::StaleDocument),
+            EnsuredWorld::Missing | EnsuredWorld::Unread(_) => {
+                return Ok(HydrateOutcome::StaleDocument);
+            }
         };
         let recapture = self
             .tab_tree
@@ -342,10 +348,22 @@ impl<'a> Hydrate<'a> {
                     let _ = self.tab_tree.retire_doc(self.page.frames(), &key.doc);
                     return Err(detached_ref(self.scope, jump));
                 }
-                // A frame tree that cannot be read (refused, or a frame's tree that never
-                // answered) cannot lead to the ref's frame: the ref is detached as far as this op
-                // can tell (ruling R63, row 6), and its document is not retired, since nothing
-                // proved it gone. The op's own timeout or cancellation stays what it is.
+                // A read that left the ref's frame out because it did not answer in time proved
+                // nothing gone: the document keeps its reservation and the ref its entry, so the
+                // same ref hydrates once the frame answers, and the op fails as a timeout (the
+                // private look's `run_timeout`). Retiring here would let one busy moment kill the
+                // ref, and every other ref printed in that document, for good.
+                Ok(EnsuredWorld::Unread(UnreadCause::TimedOut)) => {
+                    return Err(unanswered_ref(self.scope, jump));
+                }
+                // A frame tree that cannot be read (the whole tree, or the part that holds the
+                // ref's frame; refused, or a frame's tree that never answered) cannot lead to the
+                // ref's frame: the ref is detached as far as this op can tell (ruling R63, row 6),
+                // and its document is not retired, since nothing proved it gone. The op's own
+                // timeout or cancellation stays what it is.
+                Ok(EnsuredWorld::Unread(UnreadCause::Refused)) => {
+                    return Err(detached_ref(self.scope, jump));
+                }
                 Err(error) if error.error_code() == Some(ErrorCode::Internal) => {
                     return Err(detached_ref(self.scope, jump));
                 }
@@ -626,6 +644,7 @@ pub(super) async fn ensure_world(
             EnsuredWorld::Gone
         }
         Started::Missing | Started::Detached => EnsuredWorld::Missing,
+        Started::Unread(cause) => EnsuredWorld::Unread(cause),
     })
 }
 
@@ -639,7 +658,7 @@ pub(crate) async fn ensure_frame_world(
 ) -> Option<IsolatedWorld> {
     match ensure_world(page, scope, page.tree(), frame).await {
         Ok(EnsuredWorld::Ready(world)) => Some(world),
-        Ok(EnsuredWorld::Gone | EnsuredWorld::Missing) | Err(_) => None,
+        Ok(EnsuredWorld::Gone | EnsuredWorld::Missing | EnsuredWorld::Unread(_)) | Err(_) => None,
     }
 }
 
@@ -703,6 +722,15 @@ fn detached_ref(scope: &OpScope<'_>, jump: AriaRefJump) -> PlaywrightError {
     scope.fail(
         ErrorCode::ElementDetached,
         &ref_message(scope, &text, "is not on the page any more"),
+    )
+}
+
+/// `website / wait_timeout`: the ref's frame did not answer the frame tree's read in time. A
+/// timeout, not a detach: the frame may answer a moment later, and the ref with it.
+fn unanswered_ref(scope: &OpScope<'_>, jump: AriaRefJump) -> PlaywrightError {
+    scope.fail(
+        ErrorCode::WaitTimeout,
+        &format!("{jump} is in a frame that did not answer in time; try again"),
     )
 }
 

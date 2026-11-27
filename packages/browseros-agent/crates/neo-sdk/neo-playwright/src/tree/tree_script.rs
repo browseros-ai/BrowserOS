@@ -193,7 +193,7 @@ pub(super) fn key(doc: &str, dom_id: i32) -> TestResult<NodeKey> {
 /// status (so `W_old` can go `Gone` after navigation while `W_new` succeeds), queued APC
 /// replies, `DOM.resolveNode` behaviors, and probe replies.
 pub(super) struct TreeScript {
-    has_child: bool,
+    child: Mutex<ChildFrame>,
     apc_replies: Mutex<VecDeque<Value>>,
     default_apc: Mutex<Option<Value>>,
     /// Hook run right after an isolated world finishes booting, letting tests simulate a
@@ -249,6 +249,21 @@ pub(super) struct ProbeSent {
     pub(super) arguments: Value,
 }
 
+/// Where the scripted tab's child frame, [`SCRIPTED_CHILD`], is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ChildFrame {
+    /// The tab has no child frame.
+    Absent,
+    /// In the main frame's process: the main frame's own tree lists it.
+    InProcess,
+    /// In a process of its own whose renderer does not answer: the browser lists it as an
+    /// out-of-process frame, the main frame's tree does not, and attaching to it never answers,
+    /// so a read of the page's frames leaves it out (`frame_tree::FrameTree::unread`).
+    Hung,
+    /// As [`ChildFrame::Hung`], but attaching to it is refused at once.
+    Refused,
+}
+
 #[derive(Clone)]
 struct WorldStub {
     frame: String,
@@ -259,7 +274,7 @@ struct WorldStub {
 impl TreeScript {
     pub(super) fn new(default_apc: Value) -> Self {
         Self {
-            has_child: false,
+            child: Mutex::new(ChildFrame::Absent),
             apc_replies: Mutex::default(),
             default_apc: Mutex::new(Some(default_apc)),
             after_world_install: Mutex::default(),
@@ -288,9 +303,30 @@ impl TreeScript {
         }
     }
 
-    pub(super) fn with_child(mut self) -> Self {
-        self.has_child = true;
+    pub(super) fn with_child(self) -> Self {
+        self.set_child(ChildFrame::InProcess);
         self
+    }
+
+    /// Where [`SCRIPTED_CHILD`] is from now on, as the page's frame tree read finds it.
+    pub(super) fn set_child(&self, child: ChildFrame) {
+        *self.child.lock().unwrap_or_else(PoisonError::into_inner) = child;
+    }
+
+    fn child_frame(&self) -> ChildFrame {
+        *self.child.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `Target.getTargets`: no pre-existing targets at Playwright start, so the scripted tab
+    /// models a newly opened tab starting at FrameSeq(0) (bare `e1`, then `f1e1`). A hung or
+    /// refused child is the one out-of-process frame listed.
+    fn targets(&self) -> Value {
+        let out_of_process = matches!(self.child_frame(), ChildFrame::Hung | ChildFrame::Refused);
+        let child = out_of_process.then(|| {
+            json!({ "targetId": SCRIPTED_CHILD, "type": "iframe",
+                "url": "https://a.test/child", "parentFrameId": SCRIPTED_MAIN })
+        });
+        json!({ "targetInfos": child.into_iter().collect::<Vec<_>>() })
     }
 
     pub(super) fn with_rekey_retired_seq(mut self, retired: u32) -> Self {
@@ -663,7 +699,7 @@ impl TabScript for TreeScript {
     }
 
     fn child(&self) -> bool {
-        self.has_child
+        self.child_frame() == ChildFrame::InProcess
     }
 
     fn seen(&self, method: &str, _params: &Value, _session: Option<&SessionId>) {
@@ -675,6 +711,12 @@ impl TabScript for TreeScript {
     }
 
     fn delay(&self, method: &str, params: &Value) -> Duration {
+        if method == "Target.attachToTarget"
+            && params["targetId"] == SCRIPTED_CHILD
+            && self.child_frame() == ChildFrame::Hung
+        {
+            return Duration::from_secs(60);
+        }
         if method != "DOM.resolveNode" {
             return Duration::ZERO;
         }
@@ -689,6 +731,12 @@ impl TabScript for TreeScript {
 
     fn cdp_error(&self, method: &str, params: &Value) -> Option<&'static str> {
         match method {
+            "Target.attachToTarget"
+                if params["targetId"] == SCRIPTED_CHILD
+                    && self.child_frame() == ChildFrame::Refused =>
+            {
+                Some("No target with given id found")
+            }
             "DOM.resolveNode" => {
                 let error = self.resolve_node_error(params);
                 if error.is_some() {
@@ -722,9 +770,7 @@ impl TabScript for TreeScript {
 
     fn cdp_reply(&self, method: &str, params: &Value) -> Option<Value> {
         match method {
-            // Report no pre-existing targets at Playwright start so the scripted tab models a
-            // newly opened tab starting at FrameSeq(0) (bare `e1`, then `f1e1`).
-            "Target.getTargets" => Some(json!({ "targetInfos": [] })),
+            "Target.getTargets" => Some(self.targets()),
             "Page.getAnnotatedPageContent" => {
                 self.apc_calls.fetch_add(1, Ordering::SeqCst);
                 let hook = self

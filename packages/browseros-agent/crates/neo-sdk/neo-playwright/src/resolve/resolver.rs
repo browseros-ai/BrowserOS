@@ -621,7 +621,7 @@ impl<'a> Resolver<'a> {
             }
             Started::Missing => Ok(Err(Step::Missing)),
             Started::Gone(world) => Ok(Err(Step::Gone(world))),
-            Started::Detached => Err(self
+            Started::Detached | Started::Unread(_) => Err(self
                 .scope
                 .fail(ErrorCode::TargetClosed, "Frame was detached")),
         }

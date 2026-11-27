@@ -1031,42 +1031,63 @@ async fn unapproved_compares_send_nothing(
 }
 
 /// Ruling R48's row 6, not read: the box's frame is still there and stops answering for three
-/// seconds. The check ends at its two-second deadline with `run_timeout` and no boolean for the
-/// box: Neo never says `false` of a box it did not read.
+/// seconds. The check ends at its deadline with `run_timeout` and no boolean for the box: Neo
+/// never says `false` of a box it did not read. The box's document is reserved, not yet bound to
+/// a world, so the check reaches it through the page's frame tree, whose read gives a frame that
+/// does not answer two seconds; the deadlines straddle that, so a check meets its own deadline or
+/// that read's first, at random. Either way the frame was only left unread, not proven gone: once
+/// it answers again, the same ref compares. Fails with the unread frame taken as detached
+/// (`element_detached`, and the ref dead for good).
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 async fn tests_that_a_box_whose_frame_does_not_answer_gets_no_boolean() -> TestResult {
     let bench = Bench::start().await?;
-    let opened = bench.open("/private/busy-frame.html", Place::Front).await?;
-    let busy = bench.r#ref(&opened, "textbox", "Busy box").await?;
-    bench
-        .live
-        .main_world(
-            &opened.page,
-            "document.querySelector('iframe').contentWindow.postMessage('go', '*')",
-        )
-        .await?;
-    let env = bench.host(&opened);
     // The frame's own origin, approved, so only its silence keeps the compare from answering.
     let frame_origin = bench.page_origin.replace("127.0.0.1", "[::1]");
-    let mut request = compare_request(&opened, &busy, CARD_VALUE, false, &frame_origin)?;
-    request.deadline = Instant::now() + Duration::from_secs(2);
-    let answered = bench.live.playwright.look_boxes(&env, &request).await;
-    match answered {
-        Err(error) => assert_eq!(error.code, "run_timeout", "{error:?}"),
-        Ok(looks) => {
-            let look = looks.first().ok_or("an answer for the box")?;
-            let code = look.refusal.as_ref().map(|error| error.code.as_str());
-            assert_eq!(
-                (code, look.compared),
-                (Some("run_timeout"), None),
-                "{look:?}"
-            );
-        }
+    for budget in [2000, 2200, 2500] {
+        // A fresh tab each time: a ref whose document an earlier compare bound to a world skips
+        // the frame tree.
+        let opened = bench.open("/private/busy-frame.html", Place::Front).await?;
+        let busy = bench.r#ref(&opened, "textbox", "Busy box").await?;
+        bench
+            .live
+            .main_world(
+                &opened.page,
+                "document.querySelector('iframe').contentWindow.postMessage('go', '*')",
+            )
+            .await?;
+        let busy_until = Instant::now() + Duration::from_secs(3);
+        let env = bench.host(&opened);
+        let mut request = compare_request(&opened, &busy, CARD_VALUE, false, &frame_origin)?;
+        request.deadline = Instant::now() + Duration::from_millis(budget);
+        let answered = bench.live.playwright.look_boxes(&env, &request).await;
+        let (code, compared) = match &answered {
+            Err(error) => (Some(error.code.clone()), None),
+            Ok(looks) => {
+                let look = looks.first().ok_or("an answer for the box")?;
+                (
+                    look.refusal.as_ref().map(|error| error.code.clone()),
+                    booleans(look),
+                )
+            }
+        };
+        assert_eq!(
+            (code.as_deref(), compared),
+            (Some("run_timeout"), None),
+            "{budget} ms, while the frame does not answer: {answered:?}"
+        );
+        // Past the end of the frame's loop, so the browser is idle for the same ref again.
+        time::sleep_until(busy_until + Duration::from_millis(500)).await;
+        let again = compare_request(&opened, &busy, CARD_VALUE, false, &frame_origin)?;
+        let look = look_one(&bench, &opened, &again).await?;
+        assert_eq!(
+            booleans(&look),
+            Some((true, true)),
+            "{budget} ms, the same ref once the frame answers: {look:?}"
+        );
+        bench.close(opened).await?;
     }
-    // The frame's loop ends a second later: let it, so the browser is idle for the next test.
-    time::sleep(Duration::from_millis(1500)).await;
-    bench.close(opened).await
+    Ok(())
 }
 
 /// A plain check call on `opened` for the box `r#ref` names, with no expectation and no

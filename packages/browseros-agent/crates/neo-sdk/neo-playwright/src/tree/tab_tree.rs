@@ -298,7 +298,9 @@ impl TabTree {
             let world = match hydrate::ensure_world(page, scope, self, &frame).await? {
                 hydrate::EnsuredWorld::Ready(world) => world,
                 hydrate::EnsuredWorld::Gone => continue,
-                hydrate::EnsuredWorld::Missing => return Ok(Seed::Unread),
+                hydrate::EnsuredWorld::Missing | hydrate::EnsuredWorld::Unread(_) => {
+                    return Ok(Seed::Unread);
+                }
             };
             if world.installed_at() >= captured.requested_at() {
                 return Ok(Seed::Unread);
@@ -679,8 +681,8 @@ mod tests {
     use crate::test_support::{SCRIPTED_CHILD, ScriptedRun, ScriptedTab, TestResult, count_op};
     use crate::tree::private_mirror::tests::{Shown, page, shown};
     use crate::tree::tree_script::{
-        ChildFrameSpec, TreeScript, apc_reply, encode_apc_reply, encode_apc_reply_nodes,
-        encode_button_node, key,
+        ChildFrame, ChildFrameSpec, TreeScript, apc_reply, encode_apc_reply,
+        encode_apc_reply_nodes, encode_button_node, key,
     };
     use crate::tree::{AttemptStart, HydrateOutcome, TabOriginState, TabTree};
     use crate::world::{DocContext, DocLookup, DocPlace, FrameSeq, FrameWorlds, Pin, Place, Stamp};
@@ -1042,6 +1044,140 @@ mod tests {
             1,
             "child frame hydration must carry its parent iframe hop"
         );
+        Ok(())
+    }
+
+    /// A ref a snapshot printed on the child document's element, and the element's key.
+    struct ReservedRef {
+        printed: Ref,
+        key: NodeKey,
+    }
+
+    /// A capture that reserved the child document's seq and printed `f1e1` on its element: the
+    /// state a ref is in from its snapshot until an op first hydrates it.
+    async fn reserved_child_ref(
+        tab: &ScriptedTab<TreeScript>,
+        scope: &OpScope<'_>,
+        page: &OpPage<'_>,
+        tree: &TabTree,
+    ) -> TestResult<ReservedRef> {
+        tree.capture(scope, page, AttemptStart::now()).await?;
+        let key = key("doc-child", 33)?;
+        let printed = assign_ref(tree, "f1e1", &key)?;
+        assert!(
+            matches!(
+                page.frames().lookup_doc(&key.doc),
+                DocLookup::Reserved { .. }
+            ),
+            "the capture reserves the child document's seq"
+        );
+        assert_eq!(tab.script().apc_count(), 1);
+        Ok(ReservedRef { printed, key })
+    }
+
+    fn child_tab() -> Arc<ScriptedTab<TreeScript>> {
+        let child_apc = encode_apc_reply(
+            "doc-main",
+            Some("https://a.test/"),
+            &[10],
+            Some(&ChildFrameSpec {
+                iframe_dom_id: 500,
+                doc_token: "doc-child",
+                frame_token: SCRIPTED_CHILD,
+                url: Some("https://a.test/child"),
+                child_dom_ids: &[33],
+            }),
+            Some(MIN_CONTRACT_VERSION),
+        );
+        ScriptedTab::new(TreeScript::new(child_apc).with_child())
+    }
+
+    /// A frame-tree read that leaves the ref's frame out proves nothing about it, whether the
+    /// frame did not answer in time (a busy out-of-process renderer) or its read was refused.
+    /// Hydrating a reserved ref there fails, as a timeout or as ruling R63's refused read
+    /// (`element_detached`, row 6); the document keeps its reservation and the ref stays in the
+    /// table, and the same ref hydrates under the reserved seq once the frame can be read. Fails
+    /// if an unread frame is taken as detached, which retires the document and every ref printed
+    /// in it for good.
+    #[tokio::test(start_paused = true)]
+    async fn a_reserved_ref_in_a_frame_the_tree_could_not_read_hydrates_once_it_can() -> TestResult
+    {
+        for (child, code) in [
+            (ChildFrame::Hung, ErrorCode::WaitTimeout),
+            (ChildFrame::Refused, ErrorCode::ElementDetached),
+        ] {
+            let tab = child_tab();
+            let run = ScriptedRun::over(&tab).await?;
+            let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
+            let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+            let tree = TabTree::new(TabOriginState::OpenedUnderInstance);
+            let reserved = reserved_child_ref(&tab, &scope, &page, &tree).await?;
+
+            tab.script().set_child(child);
+            let unread = tree
+                .hydrate_ref(&scope, &page, jump("f1e1")?)
+                .await
+                .err()
+                .ok_or("a ref in a frame the tree could not read cannot hydrate")?;
+            assert_eq!(unread.error_code(), Some(code), "{child:?}: {unread:?}");
+            assert!(
+                matches!(
+                    page.frames().lookup_doc(&reserved.key.doc),
+                    DocLookup::Reserved { .. }
+                ),
+                "{child:?}: the document keeps its reservation"
+            );
+            assert_eq!(
+                tree.resolve_ref(&reserved.printed),
+                live(&reserved.key),
+                "{child:?}: the ref stays in the table"
+            );
+            assert_eq!(
+                tab.script().apc_count(),
+                1,
+                "{child:?}: nothing was captured"
+            );
+
+            tab.script().set_child(ChildFrame::InProcess);
+            let hydrated = tree.hydrate_ref(&scope, &page, jump("f1e1")?).await?;
+            assert_eq!(hydrated.key, reserved.key);
+            assert_eq!(
+                hydrated.seq,
+                FrameSeq(1),
+                "{child:?}: the same ref binds the document to the seq it reserved"
+            );
+            assert_eq!(hydrated.world.frame(), &FrameId(SCRIPTED_CHILD.to_owned()));
+        }
+        Ok(())
+    }
+
+    /// The control: a whole frame tree that no longer lists the ref's frame proves it detached,
+    /// so the reserved document retires with its refs, and the ref fails `element_detached`.
+    #[tokio::test]
+    async fn a_reserved_ref_whose_frame_a_whole_tree_no_longer_lists_retires_its_document()
+    -> TestResult {
+        let tab = child_tab();
+        let run = ScriptedRun::over(&tab).await?;
+        let scope = OpScope::new(&run.env, count_op()?, CallHeader::default());
+        let page = OpPage::admit_handle(&run.playwright, &scope, &run.page).await?;
+        let tree = TabTree::new(TabOriginState::OpenedUnderInstance);
+        let reserved = reserved_child_ref(&tab, &scope, &page, &tree).await?;
+
+        tab.script().set_child(ChildFrame::Absent);
+        let gone = tree
+            .hydrate_ref(&scope, &page, jump("f1e1")?)
+            .await
+            .err()
+            .ok_or("a ref whose frame left cannot hydrate")?;
+        assert_eq!(gone.error_code(), Some(ErrorCode::ElementDetached));
+        assert!(
+            matches!(
+                page.frames().lookup_doc(&reserved.key.doc),
+                DocLookup::Retired
+            ),
+            "the document retires"
+        );
+        assert_eq!(tree.resolve_ref(&reserved.printed), RefLookup::Retired);
         Ok(())
     }
 

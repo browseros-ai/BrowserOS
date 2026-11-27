@@ -76,10 +76,33 @@ pub(crate) struct FrameTree {
     frames: Vec<FrameInfo>,
     #[serde(skip)]
     hosts: HashMap<FrameId, ProtocolSession>,
-    /// The out-of-process frames the browser lists under this tree whose own tree could not be
-    /// read, and why: the tree lacks them, so it is incomplete rather than whole.
+    /// Why each out-of-process frame the browser lists under this tree could not be read: the
+    /// tree lacks them, so it is incomplete rather than whole.
     #[serde(skip)]
-    unread: Vec<(String, String)>,
+    unread: Vec<UnreadCause>,
+}
+
+/// Why a read left out an out-of-process frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum UnreadCause {
+    /// Its tree did not answer within [`OOPIF_TREE_BUDGET`]: the frame may be there with its
+    /// renderer busy, and a later read may reach it.
+    TimedOut,
+    /// Its read failed outright: refused, or its session never attached.
+    Refused,
+}
+
+/// Where one read of a page's frames places a frame ([`FrameTree::place`]).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FramePlace {
+    /// The read lists it: the frames from the main frame down to it, the main frame left out.
+    Listed(Vec<FrameId>),
+    /// A whole read does not list it: it was detached.
+    Absent,
+    /// A read that is not whole does not list it: it may be inside an out-of-process frame the
+    /// read left out, so the read says nothing about it. `TimedOut` when any frame left out did
+    /// not answer in time, since the frame may be inside that one.
+    Unread(UnreadCause),
 }
 
 /// Stable identity for one document when validating subtree lifecycle readiness.
@@ -274,6 +297,21 @@ impl FrameTree {
             at = self.frames.iter().find(|info| info.id == *parent)?;
         }
         None
+    }
+
+    /// Where this read places `frame`. Only a whole read proves a frame gone: a read under
+    /// [`Subtrees::Skip`] leaves out an out-of-process frame that does not answer in time (a
+    /// renderer busy in a script, say), and with it every frame inside it, which are as attached
+    /// as before. The frames it did read keep their paths.
+    pub(crate) fn place(&self, frame: &FrameId) -> FramePlace {
+        match self.path_to(frame) {
+            Some(path) => FramePlace::Listed(path),
+            None if self.is_whole() => FramePlace::Absent,
+            None if self.unread.contains(&UnreadCause::TimedOut) => {
+                FramePlace::Unread(UnreadCause::TimedOut)
+            }
+            None => FramePlace::Unread(UnreadCause::Refused),
+        }
     }
 }
 
@@ -565,18 +603,15 @@ async fn read_oopifs(
             };
             let read_one = oopif_tree_retried(browser, page, &oopif.target_id, parent);
             let subtree = match subtrees {
-                Subtrees::Require => read_one.await,
+                Subtrees::Require => Ok(read_one.await?),
                 // A frame whose renderer hangs never answers its tree: a read that may leave a
                 // frame out leaves that one out once its budget passes, so the frames beside it
                 // are still found (the APC capture gives such a frame the same budget).
-                Subtrees::Skip => time::timeout(OOPIF_TREE_BUDGET, read_one)
-                    .await
-                    .unwrap_or_else(|_elapsed| {
-                        Err(CoreError::Message(format!(
-                            "its tree did not answer within {} ms",
-                            OOPIF_TREE_BUDGET.as_millis()
-                        )))
-                    }),
+                Subtrees::Skip => match time::timeout(OOPIF_TREE_BUDGET, read_one).await {
+                    Ok(Ok(subtree)) => Ok(subtree),
+                    Ok(Err(_refused)) => Err(UnreadCause::Refused),
+                    Err(_elapsed) => Err(UnreadCause::TimedOut),
+                },
             };
             match subtree {
                 Ok(subtree) => tree.add_hosted(
@@ -584,10 +619,7 @@ async fn read_oopifs(
                     oopif.parent_frame_id.as_deref(),
                     &subtree.session,
                 ),
-                Err(error) if subtrees == Subtrees::Require => return Err(error),
-                Err(error) => tree
-                    .unread
-                    .push((oopif.target_id.clone(), error.to_string())),
+                Err(cause) => tree.unread.push(cause),
             }
         }
     }
@@ -695,7 +727,7 @@ mod tests {
     use serde::Serialize;
     use serde_json::json;
 
-    use super::{FrameTree, PageFrames, answer, sample_tree};
+    use super::{FramePlace, FrameTree, PageFrames, UnreadCause, answer, sample_tree};
     use crate::events::EventHub;
     use crate::events::tab_frames::{ListedFrame, TabFrameList};
     use crate::op_scope::OpScope;
@@ -724,9 +756,7 @@ mod tests {
         let mut short = sample_tree()?;
         short.frames.retain(|frame| frame.id == main);
         short.hosts.insert(main.clone(), root.clone());
-        short
-            .unread
-            .push(("unread-child".to_owned(), "session attaching".to_owned()));
+        short.unread.push(UnreadCause::Refused);
         let (events, _writer) = EventHub::new();
         let mut previous = sample_tree()?;
         for frame in &previous.frames {
@@ -834,6 +864,38 @@ mod tests {
         Ok(())
     }
 
+    /// Only a whole read proves a frame gone. A frame a whole read does not list is absent. One
+    /// missing from a read that left an out-of-process frame out is unread, since it may be inside
+    /// that frame: refused when every frame left out failed outright, timed out once any did not
+    /// answer in time. The frames the partial read did list keep their paths. Fails with a partial
+    /// read's missing frame taken as absent, which retires a busy frame's refs for good.
+    #[test]
+    fn tests_that_only_a_whole_read_places_a_frame_absent() -> Result<(), serde_json::Error> {
+        let mut tree = sample_tree()?;
+        let child = FrameId("child".to_owned());
+        let busy = FrameId("busy".to_owned());
+        assert_eq!(tree.place(&child), FramePlace::Listed(vec![child.clone()]));
+        assert_eq!(tree.place(&busy), FramePlace::Absent, "a whole read");
+        tree.unread.push(UnreadCause::Refused);
+        assert_eq!(
+            tree.place(&busy),
+            FramePlace::Unread(UnreadCause::Refused),
+            "a read that left out a frame that refused"
+        );
+        tree.unread.push(UnreadCause::TimedOut);
+        assert_eq!(
+            tree.place(&busy),
+            FramePlace::Unread(UnreadCause::TimedOut),
+            "a read that also left out a frame that did not answer"
+        );
+        assert_eq!(
+            tree.place(&child),
+            FramePlace::Listed(vec![child.clone()]),
+            "a partial read still leads to the frames it read"
+        );
+        Ok(())
+    }
+
     /// `page.frames()` answers the bytes the flattened `Option<FrameTree>` it replaced wrote,
     /// key order included, with frames and without: a later edit cannot drift unseen.
     #[test]
@@ -875,9 +937,7 @@ mod tests {
             Some(2)
         );
         let mut partial = sample_tree()?;
-        partial
-            .unread
-            .push(("oopif-1".to_owned(), "session detached".to_owned()));
+        partial.unread.push(UnreadCause::Refused);
         assert!(!partial.is_whole());
         assert!(
             partial.into_whole_frames().is_none(),
