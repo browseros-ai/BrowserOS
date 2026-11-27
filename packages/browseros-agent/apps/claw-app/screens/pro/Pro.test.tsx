@@ -636,7 +636,7 @@ describe('the ultrafast page', () => {
     expect(text()).toContain('Save your tokens')
     expect(text()).toContain('Skills run in seconds')
     expect(text()).toContain('Multi-profile mode')
-    expect(button('Show me Fewer steps')).toBeTruthy()
+    expect(button('Show me how, Fewer steps')).toBeTruthy()
     expect(text()).toContain('$20a month')
     expect(text()).toContain('Cancel any time.')
     expect(text()).toContain('2 months free')
@@ -681,14 +681,14 @@ describe('the ultrafast page', () => {
     }
 
     for (const [index, name] of FEATURE_NAMES.entries()) {
-      await click(`Show me ${name}`)
+      await click(`Show me how, ${name}`)
       expect(dialog().getAttribute('aria-label')).toBe(name)
       expect(dialog().textContent).toContain(FEATURE_LINES[index]?.[1] ?? '')
       expect(dialog().textContent).not.toContain('Start using ultrafast')
       await click('Skip', dialog())
       expect(container.querySelector('[role="dialog"]')).toBeNull()
     }
-    await click('Show me Browser profiles')
+    await click('Show me how, Browser profiles')
     expect(
       [...dialog().querySelectorAll('mark')].map((mark) => mark.textContent),
     ).toEqual(['personal profile'])
@@ -751,7 +751,7 @@ describe('the ultrafast page', () => {
     expect(text()).toContain('What’s in ultrafast')
     expect(featureTitles()).toEqual(FEATURE_LINES.map(([title]) => title))
     for (const name of FEATURE_NAMES) {
-      expect(button(`Show me ${name}`)).toBeTruthy()
+      expect(button(`Show me how, ${name}`)).toBeTruthy()
     }
     expect(text()).toContain(
       'Next on Nov 27, 2026. Stripe emails you a receipt each time.',
@@ -853,7 +853,7 @@ describe('what ultrafast has saved', () => {
     await mount()
     expect(container.querySelector('[role="dialog"]')).toBeNull()
 
-    await click('Show me ultrafast skills')
+    await click('Show me how, ultrafast skills')
     expect(dialog().getAttribute('aria-label')).toBe('ultrafast skills')
     expect(dialog().textContent).toContain('Skills run in seconds')
     expect(dialog().textContent).not.toContain('Welcome to ultrafast')
@@ -861,7 +861,7 @@ describe('what ultrafast has saved', () => {
     await click('Skip', dialog())
     expect(container.querySelector('[role="dialog"]')).toBeNull()
 
-    await click('Show me Browser profiles')
+    await click('Show me how, Browser profiles')
     expect(dialog().textContent).toContain('Multi-profile mode')
     expect(button('Start using ultrafast', dialog())).toBeTruthy()
   })

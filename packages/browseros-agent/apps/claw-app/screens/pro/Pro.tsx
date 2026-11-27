@@ -79,7 +79,7 @@ export function Pro() {
   const [cancelOpen, setCancelOpen] = useState(false)
   const [tourAt, setTourAt] = useState<number | null>(null)
   const [tourOpens, setTourOpens] = useState(0)
-  // Show me, on a feature box or the savings hero, opens the tour at that feature.
+  // Show me how, on a feature box or the savings hero, opens the tour at that feature.
   const showMe = (step: number) => {
     setTourOpens((count) => count + 1)
     setTourAt(step)
@@ -261,7 +261,7 @@ export function Pro() {
 
 /**
  * What ultrafast adds, one box each, the same before and after signup: a
- * headline and a picture. Show me opens the tour at that feature, where the
+ * headline and a picture. Show me how opens the tour at that feature, where the
  * line explaining it sits beside the same picture.
  */
 function FeatureTiles({ onShowMe }: { onShowMe: (step: number) => void }) {
@@ -295,7 +295,7 @@ function FeatureTiles({ onShowMe }: { onShowMe: (step: number) => void }) {
         {/* From md up the lower boxes share two rows, header and picture (each
             box is a subgrid of them), so both headers take the taller one's
             height and both pictures start on one line however the titles wrap.
-            Show me sits at the foot of the header, so it lines up too. */}
+            Show me how sits at the foot of the header, so it lines up too. */}
         <div className="grid gap-4 md:grid-cols-2 md:grid-rows-[auto_1fr] md:gap-y-0">
           {rest}
         </div>
@@ -304,7 +304,7 @@ function FeatureTiles({ onShowMe }: { onShowMe: (step: number) => void }) {
   )
 }
 
-/** One feature: its headline and Show me, over its picture. The first is wide. */
+/** One feature: its headline and Show me how, over its picture. The first is wide. */
 function FeatureTile({
   step,
   index,
@@ -326,7 +326,7 @@ function FeatureTile({
     >
       <div
         className={cn(
-          'flex flex-col items-start gap-2 px-6 pt-[22px] pb-5',
+          'flex flex-col items-start gap-3.5 px-6 pt-[22px] pb-5',
           wide && 'lg:justify-center',
         )}
       >
@@ -336,14 +336,14 @@ function FeatureTile({
         </h3>
         <button
           type="button"
-          aria-label={`Show me ${step.name}`}
+          aria-label={`Show me how, ${step.name}`}
           onClick={() => onShowMe(index)}
           className={cn(
             'rounded-sm font-semibold text-[14px] text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring',
             !wide && 'md:mt-auto',
           )}
         >
-          Show me
+          Show me how
         </button>
       </div>
       <div
