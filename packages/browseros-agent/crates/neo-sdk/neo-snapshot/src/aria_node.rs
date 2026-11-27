@@ -75,7 +75,9 @@ pub struct AriaNode {
     #[serde(default, deserialize_with = "present")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selected: Option<bool>,
-    /// `aria-hidden="true"` was on the element.
+    /// Outermost emitted `aria-hidden="true"` boundary in this document: set when the element
+    /// carries `aria-hidden="true"` itself or inherits it from an unemitted ancestor, and omitted
+    /// on descendants already nested under a marked ancestor.
     #[serde(default, deserialize_with = "present")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub aria_hidden: Option<bool>,

@@ -194,7 +194,8 @@ pub struct EmittedNode<'a> {
     pub pressed: Option<Tristate>,
     /// Option, tab, or row selected state.
     pub selected: Option<bool>,
-    /// Explicit `aria-hidden="true"` mark.
+    /// Outermost emitted `aria-hidden="true"` boundary in this document (own or inherited from an
+    /// unemitted ancestor; omitted beneath an already-marked emitted ancestor).
     pub aria_hidden: Option<bool>,
     /// Snapshot ref (`eN` / `fMeN`), borrowed or inline.
     pub r#ref: Option<NodeRef<'a>>,

@@ -65,6 +65,9 @@ impl Hidden {
 
     /// Whether `AnnotatedRole::ContentHidden` applies to this node or a same-document ancestor
     /// (including propagation through a user-agent shadow slot such as a closed `<details>`).
+    ///
+    /// A node with only its own `ContentHidden` hides its descendants, not itself; strict
+    /// descendants inherit this flag and become hidden for ARIA and box visibility.
     #[must_use]
     pub const fn is_content_hidden(self) -> bool {
         (self.0 & CONTENT_HIDDEN) != 0
@@ -212,7 +215,20 @@ fn compute_hidden_top_down(nodes: &[TreeNode]) -> Vec<Hidden> {
 
         let aria_hidden = raw_aria_hidden || parent_hidden.is_aria_hidden();
         let has_own_aria_hidden = !ua_shadow && raw_aria_hidden && !parent_hidden.is_aria_hidden();
-        let content_hidden = own_content_hidden || parent_hidden.is_content_hidden();
+        let inherited_content_hidden = parent_hidden.is_content_hidden();
+        let content_hidden = own_content_hidden || inherited_content_hidden;
+        // CSS `content-visibility: hidden` (including `hidden="until-found"`) skips layout and
+        // painting of an element's descendants while the element itself keeps its principal box.
+        // Blink's `Element::checkVisibility()` skips `this` and checks strict ancestors only
+        // (`element.cc`), so Playwright's `isElementHiddenForAria` and `computeBox` keep the
+        // element visible and hide only its descendants. Closed `<details>` still hides its body
+        // because Blink marks the `ua_shadow` slot `ContentHidden` (already hidden by `ua_shadow`)
+        // and the slotted page children inherit `inherited_content_hidden`.
+        let content_hides_self = if is_text {
+            content_hidden
+        } else {
+            inherited_content_hidden
+        };
 
         let visibility_hidden =
             !is_text && browseros.is_some_and(|b| b.visibility_hidden == Some(true));
@@ -234,18 +250,18 @@ fn compute_hidden_top_down(nodes: &[TreeNode]) -> Vec<Hidden> {
 
         let box_visible = !ua_shadow
             && !visibility_hidden
-            && !content_hidden
+            && !content_hides_self
             && !own_box_empty
             && raw.is_some_and(has_non_empty_outer_box);
 
         let hidden_for_aria = if ua_shadow {
             true
         } else if is_text {
-            aria_hidden || content_hidden
+            aria_hidden || content_hides_self
         } else {
             is_ignored
                 || aria_hidden
-                || (!option_in_select && !is_slot && (visibility_hidden || content_hidden))
+                || (!option_in_select && !is_slot && (visibility_hidden || content_hides_self))
         };
 
         let mut flags = Hidden::default();
