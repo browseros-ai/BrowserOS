@@ -432,7 +432,7 @@ export function runsChoice(
       state: 'always',
       selected: 'with_agent',
       withoutLocked: true,
-      chip: 'Always with your agent',
+      chip: 'Always step by step',
       chipTone: 'muted',
     }
   }
@@ -441,7 +441,7 @@ export function runsChoice(
       ...base,
       state: 'without',
       selected: 'without_agent',
-      chip: 'runs without your agent',
+      chip: 'runs in one go',
       chipTone: 'ultrafast',
     }
   }
@@ -450,7 +450,7 @@ export function runsChoice(
       ...base,
       state: 'with',
       selected: 'with_agent',
-      chip: 'Runs with your agent',
+      chip: 'Runs step by step',
       chipTone: 'muted',
     }
   }

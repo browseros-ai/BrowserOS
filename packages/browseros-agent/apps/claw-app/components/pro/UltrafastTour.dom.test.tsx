@@ -217,7 +217,7 @@ describe('UltrafastTour', () => {
     expect(headline()).toBe('Skills run in seconds')
     expect(dialog().getAttribute('aria-label')).toBe('ultrafast skills')
     expect(dialog().textContent).toContain(
-      'Illustration. You pick with or without your agent.',
+      'Illustration. Your agent runs it step by step or in one go.',
     )
 
     await click('Step 3 of 3')

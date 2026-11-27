@@ -290,7 +290,7 @@ describe('the skill page without ultrafast', () => {
     expect(text()).toContain('ultrafast is off on this computer')
     expect(text()).toContain('Reorder my usual toothpaste')
     expect(text()).toContain(
-      'Illustration. You pick with or without your agent.',
+      'Illustration. Your agent runs it step by step or in one go.',
     )
     expect(link('See ultrafast')?.getAttribute('href')).toBe('/pro')
   })
@@ -371,13 +371,13 @@ describe('the skill page with ultrafast', () => {
       'You can choose how it runs at the top of this page.',
     )
     expect(text()).not.toContain('Ultrafast')
-    expect(text()).toContain('Without your agent ultrafast')
+    expect(text()).toContain('In one go ultrafast')
     const names = [...container.querySelectorAll('[aria-labelledby]')].map(
       (radio) =>
         document.getElementById(radio.getAttribute('aria-labelledby') ?? '')
           ?.textContent,
     )
-    expect(names).toEqual(['With your agent', 'Without your agent'])
+    expect(names).toEqual(['Step by step', 'In one go'])
   })
 
   it('tests that a skill that needs a repair says so beside the wordmark', async () => {
