@@ -548,6 +548,12 @@ impl LiveRun {
         test_page(opened.get("page").ok_or("newPage returns a page")?)
     }
 
+    /// Brings `page`'s tab forward through the host's hook, as an op's input does before its
+    /// first event (`OpEnv::bring_forward`), for a test that reads the page as input will find it.
+    pub(crate) async fn bring_forward(&self, page: &TestPage) {
+        self.env.bring_forward(page.tab).await;
+    }
+
     /// Closes `page`, whatever state the test left it in.
     pub(crate) async fn close_page(&self, page: &TestPage) {
         let _ = self

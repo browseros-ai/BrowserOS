@@ -696,6 +696,19 @@ async fn tests_that_a_refused_click_leaves_the_mouse_where_it_was() -> TestResul
     Ok(())
 }
 
+/// `[innerWidth, innerHeight]` once it has held for three frames in a row, at most two seconds
+/// of frames: a resize the browser sent lands on the page's next frame.
+const SETTLED_VIEWPORT: &str = "new Promise(resolve => { \
+    let last = '', same = 0, frames = 0; \
+    const tick = () => { \
+        const now = [innerWidth, innerHeight]; \
+        same = String(now) === last ? same + 1 : 0; \
+        last = String(now); \
+        if (same >= 3 || ++frames > 120) resolve(now); else requestAnimationFrame(tick); \
+    }; \
+    requestAnimationFrame(tick); \
+})";
+
 #[tokio::test]
 #[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
 #[expect(
@@ -711,8 +724,12 @@ async fn tests_that_click_clips_each_corner_before_dispatching_viewport_input() 
         &server.url("127.0.0.1", "/actions/click-viewport.html"),
     )
     .await?;
-    let viewport: [i32; 2] =
-        serde_json::from_value(run.eval(&page, "[innerWidth, innerHeight]").await?)?;
+    // The tab opens in the background, and the first click brings it forward. A background tab
+    // can be laid out smaller than a shown one: under `--no-sandbox` a startup infobar takes 56
+    // pixels of its height until it is shown. So the tab comes forward as the click would bring
+    // it, and the viewport every click must leave alone is the one it settles at.
+    run.bring_forward(&page).await;
+    let viewport: [i32; 2] = serde_json::from_value(run.eval(&page, SETTLED_VIEWPORT).await?)?;
     let [width, height] = viewport;
     let mut failures = Vec::new();
     for (name, x, y, point) in [
