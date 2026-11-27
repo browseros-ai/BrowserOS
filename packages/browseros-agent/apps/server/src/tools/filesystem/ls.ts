@@ -25,28 +25,38 @@ async function collectVisibleEntries(
   resolved: string,
   entries: Dirent[],
 ): Promise<{ dirs: string[]; files: Array<{ name: string; size: number }> }> {
+  const entriesWithInfo = await Promise.all(
+    entries.map(async (entry) => {
+      const childPath = join(inputPath, entry.name as string)
+      try {
+        await resolveWorkspacePathFromRoot(root, childPath)
+      } catch {
+        return null
+      }
+
+      if (entry.isDirectory()) {
+        return { type: 'dir' as const, name: entry.name }
+      }
+
+      try {
+        const info = await stat(join(resolved, entry.name))
+        return { type: 'file' as const, name: entry.name, size: info.size }
+      } catch {
+        return { type: 'file' as const, name: entry.name, size: 0 }
+      }
+    }),
+  )
+
   const dirs: string[] = []
   const files: Array<{ name: string; size: number }> = []
 
-  for (const entry of entries) {
-    const childPath = join(inputPath, entry.name as string)
-    try {
-      await resolveWorkspacePathFromRoot(root, childPath)
-    } catch {
-      continue
-    }
-
-    if (entry.isDirectory()) {
+  for (const entry of entriesWithInfo) {
+    if (!entry) continue
+    if (entry.type === 'dir') {
       dirs.push(entry.name)
       continue
     }
-
-    try {
-      const info = await stat(join(resolved, entry.name))
-      files.push({ name: entry.name, size: info.size })
-    } catch {
-      files.push({ name: entry.name, size: 0 })
-    }
+    files.push({ name: entry.name, size: entry.size })
   }
 
   return { dirs, files }
