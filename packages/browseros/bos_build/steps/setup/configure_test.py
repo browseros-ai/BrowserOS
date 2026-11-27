@@ -53,6 +53,18 @@ class ConfigureValidateTest(unittest.TestCase):
 
 
 class ConfigureExecuteTest(unittest.TestCase):
+    def test_release_presets_exclude_chromium_testing_experiments(self):
+        presets = Path(configure.__file__).resolve().parents[2] / "config" / "gn"
+        for platform in ("windows", "macos", "linux"):
+            with self.subTest(platform=platform):
+                flags = (presets / f"flags.{platform}.release.gn").read_text()
+                ctx, chromium, _ = self._execute("release", flags=flags)
+                args_gn = (chromium.src / ctx.out_dir / "args.gn").read_text()
+                self.assertRegex(
+                    args_gn,
+                    r"(?m)^\s*disable_fieldtrial_testing_config\s*=\s*true\s*$",
+                )
+
     def _execute(
         self,
         build_type: str,
