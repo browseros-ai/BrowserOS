@@ -222,7 +222,7 @@ describe('UltrafastTour', () => {
     )
     expect(marked()).toEqual(['ultrafast skill'])
     expect(dialog().textContent).toContain(
-      'Check the price of my usual toothpaste',
+      'Reorder my regular coffee from Starbucks',
     )
 
     await click('Step 3 of 3')

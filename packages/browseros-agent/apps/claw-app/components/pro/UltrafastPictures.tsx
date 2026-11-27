@@ -7,8 +7,8 @@
 import {
   Bot,
   Check,
+  Coffee,
   type LucideIcon,
-  ShoppingCart,
   UserRoundCheck,
   WandSparkles,
 } from 'lucide-react'
@@ -57,11 +57,11 @@ export function SkillPicture() {
     <Picture>
       <div className="grid grid-cols-[36px_minmax(0,1fr)] items-center gap-3 rounded-xl border border-border-2 bg-card px-3.5 py-3 shadow-card motion-safe:animate-fade-up">
         <span className="grid size-9 place-items-center rounded-md bg-accent-tint text-accent-ink">
-          <ShoppingCart className="size-4" />
+          <Coffee className="size-4" />
         </span>
         <span className="flex min-w-0 flex-col gap-1">
           <span className="truncate font-semibold text-[14px] text-cyanotype-ink">
-            Check the price of my usual toothpaste
+            Reorder my regular coffee from Starbucks
           </span>
           <span className="inline-flex items-center gap-1 self-start rounded-full bg-accent-tint px-2 py-0.5 font-semibold text-[12px] text-accent-ink">
             <WandSparkles className="size-3" />
