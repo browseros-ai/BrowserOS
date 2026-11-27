@@ -82,6 +82,26 @@ describe('release-claw-server workflow', () => {
     )
   })
 
+  it('pins Linux ABI compatibility and verifies both new and recovered packages', () => {
+    const build = section('  build:', '  publish-versioned:')
+    const verification = section(
+      '      - name: Verify packaged Linux compatibility',
+      '      - name: Upload target zip artifact',
+    )
+    expect(build).toContain('LINUX_GLIBC_VERSION: "2.17"')
+    expect(build).toContain('ziglang==0.15.2')
+    expect(build).toContain('cargo-zigbuild --version 0.23.0')
+    expect(build).toContain('cargo_command=zigbuild')
+    expect(build).toContain('build_target="$RUST_TARGET.$LINUX_GLIBC_VERSION"')
+    expect(verification).not.toContain('steps.recover.outputs.recovered !=')
+    expect(verification).toContain(
+      'steps.package.outputs.zip_path || steps.recover.outputs.zip_path',
+    )
+    expect(verification).toContain('validate_linux_server.py')
+    expect(verification).toContain('debian:12-slim')
+    expect(verification).toContain('--network none')
+  })
+
   it('uploads only immutable version keys and attaches all draft assets', () => {
     const publish = section('  publish-versioned:', '  finalize:')
     const attach = section(
