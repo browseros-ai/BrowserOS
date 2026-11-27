@@ -247,7 +247,7 @@ export function Pro() {
         open={checkout.welcoming || tourAt !== null}
         startAt={tourAt ?? 0}
         welcome={checkout.welcoming}
-        on={pro || checkout.welcoming}
+        on={pro}
         onClose={() => {
           if (checkout.welcoming) checkout.closeWelcome()
           setTourAt(null)

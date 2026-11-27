@@ -23,7 +23,7 @@ interface UltrafastTourProps {
   startAt?: number
   /** Just paid: step one says welcome. */
   welcome?: boolean
-  /** ultrafast is on here. Before buying, the last step just closes with Done. */
+  /** ultrafast is on here. Before buying, the last step just closes with Done; a welcome counts as on. */
   on?: boolean
   onClose: () => void
 }
@@ -127,7 +127,7 @@ export function UltrafastTour({
               ) : (
                 <CenterMorphModalClose>
                   <Button size="sm" className="font-semibold">
-                    {on ? 'Start using ultrafast' : 'Done'}
+                    {on || welcome ? 'Start using ultrafast' : 'Done'}
                   </Button>
                 </CenterMorphModalClose>
               )}
