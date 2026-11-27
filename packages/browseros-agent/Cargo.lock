@@ -2022,6 +2022,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "neo-jev"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "neo-playwright"
 version = "0.1.0"
 dependencies = [

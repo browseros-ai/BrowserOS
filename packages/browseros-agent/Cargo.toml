@@ -6,6 +6,7 @@ members = [
     "apps/claw-server",
     "crates/neo-sdk/neo-server",
     "crates/neo-sdk/neo-captcha",
+    "crates/neo-sdk/neo-jev",
     "crates/neo-sdk/neo-screencast",
     "crates/neo-sdk/neo-playwright",
     "crates/neo-sdk/neo-snapshot",
@@ -29,6 +30,7 @@ repository = "https://github.com/browseros-ai/BrowserOS"
 harness-integrations = { path = "crates/harness-integrations" }
 browseros-cdp = { path = "crates/browseros-cdp" }
 neo-captcha = { path = "crates/neo-sdk/neo-captcha" }
+neo-jev = { path = "crates/neo-sdk/neo-jev" }
 neo-screencast = { path = "crates/neo-sdk/neo-screencast" }
 browseros-core = { path = "crates/browseros-core" }
 browseros-decide = { path = "crates/browseros-decide" }

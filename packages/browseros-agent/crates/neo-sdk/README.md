@@ -58,6 +58,7 @@ host / MCP run
 | `neo-trace` | Run and operation records, storage and bounded trace values. |
 | `neo-sdk-api` | Host API specification, generated Rust models and compatibility rules. |
 | `neo-captcha` | Shared CAPTCHA solver, also used by desktop. `testbed/` checks it end to end through `run` ([README](neo-captcha/testbed/README.md)). |
+| `neo-jev` | Jev decisions for the coming `neo.find`, `neo.findAll`, `neo.check` and `neo.choose`: snapshot text in, a verdict out; never touches a browser. Nothing calls it yet. |
 | `neo-screencast` | Shared capture hub, also used by desktop. |
 | `neo-slimviewer` | Standalone X11-to-H.264 streamer and web viewer. Its Dockerfile supplies the SDK image. |
 
