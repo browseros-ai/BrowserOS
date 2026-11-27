@@ -61,39 +61,6 @@ export const strictFailures: ReadonlyMap<string, Expectation> = new Map([
       signature: 'invalid-date-reset',
     },
   ],
-  [
-    'snapshot-concurrency-001',
-    {
-      kind: 'xfail',
-      reason:
-        'zero-sized own box (apc-own-border-box, C8 P22: field 38 own_box_empty)',
-      signature: 'zero-size-target-ref',
-    },
-  ],
-  [
-    'snapshot-concurrency-004',
-    {
-      kind: 'xfail',
-      reason: 'cross-site frame below the fold (apc-oopif-actionable, C8 P21)',
-      signature: 'below-fold-oopif-ref',
-    },
-  ],
-  [
-    'snapshot-concurrency-005',
-    {
-      kind: 'xfail',
-      reason: 'cross-site frame below the fold (apc-oopif-actionable, C8 P21)',
-      signature: 'below-fold-oopif-ref',
-    },
-  ],
-  [
-    'snapshot-concurrency-008',
-    {
-      kind: 'xfail',
-      reason: 'cross-site frame below the fold (apc-oopif-actionable, C8 P21)',
-      signature: 'below-fold-oopif-ref',
-    },
-  ],
 ])
 
 export function requireCondition(

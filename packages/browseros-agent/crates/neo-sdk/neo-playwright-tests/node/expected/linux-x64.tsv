@@ -21,11 +21,8 @@ AR-061	fail	tests/page/page-aria-snapshot-ai.spec.ts	should omit redundant name 
 AR-054	fail	tests/page/page-aria-snapshot-ai.spec.ts	should persist iframe references
 AR-070	fail	tests/page/page-aria-snapshot-ai.spec.ts	should resolve refs of distilled-away nodes
 AR-076	fail	tests/page/page-aria-snapshot-ai.spec.ts	should show visible children of hidden elements
-AR-083	fail	tests/page/page-aria-snapshot-ai.spec.ts	should snapshot a locator inside a frameset frame
-AR-082	fail	tests/page/page-aria-snapshot-ai.spec.ts	should snapshot frameset pages
 AR-052	fail	tests/page/page-aria-snapshot-ai.spec.ts	should stitch all frame snapshots
 AR-084	fail	tests/page/page-aria-snapshot-ai.spec.ts	should stitch iframes inside a frameset frame
-AR-085	fail	tests/page/page-aria-snapshot-ai.spec.ts	should stitch nested frameset documents
 AR-021	skip	tests/page/page-aria-snapshot.spec.ts	check aria-hidden text
 AR-036	skip	tests/page/page-aria-snapshot.spec.ts	match values both against regex and string
 AR-006	skip	tests/page/page-aria-snapshot.spec.ts	should allow text nodes
@@ -38,13 +35,11 @@ AR-031	skip	tests/page/page-aria-snapshot.spec.ts	should escape special yaml val
 AR-027	skip	tests/page/page-aria-snapshot.spec.ts	should escape yaml text in text nodes
 AR-029	skip	tests/page/page-aria-snapshot.spec.ts	should handle long strings
 AR-022	skip	tests/page/page-aria-snapshot.spec.ts	should ignore presentation and none roles
-AR-040	fail	tests/page/page-aria-snapshot.spec.ts	should include frames on frameset pages
 AR-017	skip	tests/page/page-aria-snapshot.spec.ts	should include new line for block pseudo
 AR-020	skip	tests/page/page-aria-snapshot.spec.ts	should include pseudo codepoints
 AR-015	skip	tests/page/page-aria-snapshot.spec.ts	should include pseudo in text
 AR-016	skip	tests/page/page-aria-snapshot.spec.ts	should not include hidden pseudo in text
 AR-032	skip	tests/page/page-aria-snapshot.spec.ts	should not report textarea textContent
-AR-033	fail	tests/page/page-aria-snapshot.spec.ts	should not show visible children of hidden elements
 AR-024	skip	tests/page/page-aria-snapshot.spec.ts	should not use on as checkbox value
 AR-004	skip	tests/page/page-aria-snapshot.spec.ts	should quote names that look like regexes
 AR-025	skip	tests/page/page-aria-snapshot.spec.ts	should respect aria-owns

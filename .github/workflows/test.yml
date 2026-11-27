@@ -33,9 +33,9 @@ env:
   # download alias (download/BrowserOS.AppImage) still serves 0.51.0, which predates it. Bump
   # the three lines together from releases/browseros/<version>/linux/release.json. R2 objects
   # can be overwritten, so the sha256 check, not the URL, is what holds the pin.
-  BROWSEROS_APPIMAGE_VERSION: 0.53.0.2
-  BROWSEROS_APPIMAGE_URL: https://cdn.browseros.com/releases/browseros/0.53.0.2/linux/BrowserOS_v0.53.0.2_x64.AppImage
-  BROWSEROS_APPIMAGE_SHA256: ca783a838111277e874589f72cd6ecb882f4b61f829224292bf0cf7664bd1e8b
+  BROWSEROS_APPIMAGE_VERSION: 0.53.0.3
+  BROWSEROS_APPIMAGE_URL: https://cdn.browseros.com/releases/browseros/0.53.0.3/linux/BrowserOS_v0.53.0.3_x64.AppImage
+  BROWSEROS_APPIMAGE_SHA256: e5df7ba8e75dcd4b52d67113f04284724749b080e166346b564e7e023dd7b946
 
 concurrency:
   group: tests-${{ github.event.pull_request.number || github.ref }}

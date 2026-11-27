@@ -141,11 +141,11 @@
   },
   {
     "path": "ruled/bodies/reads/snapshot-frame-order.txt",
-    "sha256": "30fae6d56f9dddecba27b274fbd0a3517bfcbb6b509caec0288cc6349f598ade"
+    "sha256": "06add3f1a23cc7789b978b8324151fbe0baa9b4eb9fa8e6db698dbfc51e4a255"
   },
   {
     "path": "ruled/bodies/reads/snapshot-new-page-frames.txt",
-    "sha256": "cb73890ea26e27c483d88de5675c6e1f1a1d6b439d4b08f9f5fff6621e46347a"
+    "sha256": "b85a44a1fc5b31baa5e9b97a68723647df25ff3b50f8e69ea64b09e5fd80505a"
   },
   {
     "path": "ruled/bodies/reads/tabs-new-context.txt",
