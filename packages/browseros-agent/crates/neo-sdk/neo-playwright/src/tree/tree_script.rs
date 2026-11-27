@@ -315,6 +315,17 @@ impl TreeScript {
         *self.child.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// `Target.getTargets`: no pre-existing targets at Playwright start, so the scripted tab
+    /// models a newly opened tab starting at FrameSeq(0) (bare `e1`, then `f1e1`). A hung child
+    /// is the one out-of-process frame listed.
+    fn targets(&self) -> Value {
+        let hung = (self.child_frame() == ChildFrame::Hung).then(|| {
+            json!({ "targetId": SCRIPTED_CHILD, "type": "iframe",
+                "url": "https://a.test/child", "parentFrameId": SCRIPTED_MAIN })
+        });
+        json!({ "targetInfos": hung.into_iter().collect::<Vec<_>>() })
+    }
+
     pub(super) fn with_rekey_retired_seq(mut self, retired: u32) -> Self {
         self.rekey_first_main = AtomicBool::new(true);
         self.rekey_retired_seq = retired;
@@ -750,16 +761,7 @@ impl TabScript for TreeScript {
 
     fn cdp_reply(&self, method: &str, params: &Value) -> Option<Value> {
         match method {
-            // Report no pre-existing targets at Playwright start so the scripted tab models a
-            // newly opened tab starting at FrameSeq(0) (bare `e1`, then `f1e1`). A hung child is
-            // the one out-of-process frame listed.
-            "Target.getTargets" => {
-                let hung = (self.child_frame() == ChildFrame::Hung).then(|| {
-                    json!({ "targetId": SCRIPTED_CHILD, "type": "iframe",
-                        "url": "https://a.test/child", "parentFrameId": SCRIPTED_MAIN })
-                });
-                Some(json!({ "targetInfos": hung.into_iter().collect::<Vec<_>>() }))
-            }
+            "Target.getTargets" => Some(self.targets()),
             "Page.getAnnotatedPageContent" => {
                 self.apc_calls.fetch_add(1, Ordering::SeqCst);
                 let hook = self
