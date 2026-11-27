@@ -22,7 +22,6 @@ import {
   formatPrice,
   isBillingPeriod,
   keyHasEnded,
-  monthlyEquivalent,
   monthsFree,
   monthsFreeLabel,
   PLAN_UNCHECKED,
@@ -149,9 +148,6 @@ export function PricePanel({
           </>
         ) : (
           <>
-            {price.interval === 'year'
-              ? `Works out to ${monthlyEquivalent(price)} a month. `
-              : null}
             Cancel any time.
             {trialDays > 0 ? ' The free trial comes with Monthly.' : null}
           </>

@@ -17,7 +17,6 @@ import {
   keyHasEnded,
   keyLooksWhole,
   lastUsedLine,
-  monthlyEquivalent,
   monthsFree,
   monthsFreeLabel,
   pickPeriod,
@@ -81,10 +80,9 @@ describe('prices', () => {
     expect(formatPrice({ amount: 3000, currency: 'jpy' })).toBe('¥3,000')
   })
 
-  it('tests that a year shows its monthly cost and the months it saves', () => {
+  it('tests that a year shows the months it saves', () => {
     const prices = proPrices(pricingOf([MONTH, YEAR]))
     if (!prices) throw new Error('no prices')
-    expect(monthlyEquivalent(YEAR)).toBe('$16.67')
     expect(monthsFree(prices)).toBe(2)
     expect(monthsFreeLabel(2)).toBe('2 months free')
     expect(monthsFreeLabel(1)).toBe('1 month free')

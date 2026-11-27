@@ -133,14 +133,6 @@ export function formatPrice(price: Pick<PlanPrice, 'amount' | 'currency'>) {
   )
 }
 
-/** What a year costs per month, for "Works out to $16.67 a month." */
-export function monthlyEquivalent(year: PlanPrice): string {
-  return formatPrice({
-    amount: Math.round(year.amount / 12),
-    currency: year.currency,
-  })
-}
-
 /** How many months a year saves against paying monthly, when it saves any. */
 export function monthsFree(prices: ProPrices): number | null {
   if (!prices.month || !prices.year || prices.month.amount === 0) return null

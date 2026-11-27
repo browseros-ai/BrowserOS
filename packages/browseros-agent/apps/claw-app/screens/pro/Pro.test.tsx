@@ -695,7 +695,7 @@ describe('the ultrafast page', () => {
     expect(button('Done', dialog())).toBeTruthy()
   })
 
-  it('tests that Yearly shows the yearly price and what it works out to', async () => {
+  it('tests that Yearly shows the yearly price and no monthly breakdown', async () => {
     await mount()
     const yearly = [...container.querySelectorAll('[role="tab"]')].find(
       (tab) => nameOf(tab) === 'Yearly2 months free',
@@ -706,7 +706,7 @@ describe('the ultrafast page', () => {
     await settle()
 
     expect(text()).toContain('$200a year')
-    expect(text()).toContain('Works out to $16.67 a month.')
+    expect(text()).not.toContain('Works out to')
   })
 
   it('tests that a build without billing sends the reader home', async () => {
