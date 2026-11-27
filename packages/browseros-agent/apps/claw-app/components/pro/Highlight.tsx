@@ -5,10 +5,9 @@
  */
 
 /**
- * A sentence with one phrase in the yellow highlight that the ultrafast
- * feature cards, the tour and the profile picture share. The phrase never
- * breaks across rows. Its yellow is a one-off, so the colours live here, one
- * pair per theme, rather than in the theme tokens.
+ * A sentence with one phrase set in bold blue, which the ultrafast feature
+ * cards, the tour and the profile picture share. The phrase never breaks
+ * across rows. A <mark>, so it still reads as the point of the sentence.
  */
 export function Highlight({ text, phrase }: { text: string; phrase?: string }) {
   const at = phrase ? text.indexOf(phrase) : -1
@@ -16,7 +15,7 @@ export function Highlight({ text, phrase }: { text: string; phrase?: string }) {
   return (
     <>
       {text.slice(0, at)}
-      <mark className="whitespace-nowrap rounded-[4px] bg-[#ffe169] px-[5px] font-semibold text-[#0c2742] dark:bg-[#f5d547] dark:text-[#1b1e1e]">
+      <mark className="whitespace-nowrap bg-transparent font-semibold text-primary">
         {phrase}
       </mark>
       {text.slice(at + phrase.length)}

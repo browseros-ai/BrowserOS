@@ -20,7 +20,7 @@ export interface UltrafastStep {
   name: string
   title: string
   line: string
-  /** The words of `line` set in the yellow highlight, on the feature card and in the tour. */
+  /** The words of `line` set in bold blue, on the feature card and in the tour. */
   highlight?: string
 }
 
@@ -49,7 +49,7 @@ export const ULTRAFAST_STEPS: readonly UltrafastStep[] = [
 
 /** What a plan pays for, as approved: one line on the plan picker, before buying. */
 export const BACKING_LINE =
-  'This plan helps support future development of BrowserOS neo! 💙'
+  'Thank you for supporting the future development of BrowserOS neo! 💙'
 
 /** The same, as thanks, once someone pays or cancels. */
 export const BACKING_THANKS =

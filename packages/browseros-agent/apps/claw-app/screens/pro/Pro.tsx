@@ -80,7 +80,7 @@ export function Pro() {
   const [cancelOpen, setCancelOpen] = useState(false)
   const [tourAt, setTourAt] = useState<number | null>(null)
   const [tourOpens, setTourOpens] = useState(0)
-  // Show me opens the tour at that feature, on Free and once ultrafast is on.
+  // The savings hero's Show me opens the tour at that feature, once ultrafast is on.
   const showMe = (step: number) => {
     setTourOpens((count) => count + 1)
     setTourAt(step)
@@ -156,7 +156,7 @@ export function Pro() {
             trialLength={monthlyTrialDays(pricing.data) || DEFAULT_TRIAL_DAYS}
           />
           {current.onKey ? <KeySection planKey={planKey} /> : null}
-          <FeatureTiles onShowMe={showMe} />
+          <FeatureTiles />
         </>
       ) : (
         <>
@@ -167,7 +167,8 @@ export function Pro() {
             <div className="flex min-w-0 flex-col items-start gap-3.5">
               <PageHeader title={TITLE} />
               <p className="max-w-[20ch] font-extrabold text-[28px] text-cyanotype-ink leading-[1.12] tracking-[-0.03em] md:text-[34px]">
-                The new Pro plan for BrowserOS neo to give you superpowers.
+                The pro plan to <span className="text-primary">get more</span>{' '}
+                out of BrowserOS neo.
               </p>
               <div
                 aria-live="polite"
@@ -195,7 +196,7 @@ export function Pro() {
               <StepRacePicture large />
             </div>
           </section>
-          <FeatureTiles onShowMe={showMe} />
+          <FeatureTiles />
           {idle && prices ? (
             <section
               aria-label="Get ultrafast again"
@@ -259,21 +260,22 @@ export function Pro() {
 // ---------------------------------------------------------------------------
 
 /**
- * What ultrafast adds, one box each, the same before and after signup. Show me
- * opens the tour at that feature.
+ * What ultrafast adds, one box each, the same before and after signup. Hide
+ * details beside the heading folds every box down to its headline and line, so
+ * a reader who has the idea can skim; Show details brings the pictures back.
  */
-function FeatureTiles({
-  onShowMe,
-}: {
-  /** Opens the tour at that picture. */
-  onShowMe?: (step: number) => void
-}) {
+function FeatureTiles() {
+  const [open, setOpen] = useState(true)
+  const pictureIds = ULTRAFAST_STEPS.map(
+    (_, index) => `ultrafast-picture-${index}`,
+  )
   const [first, ...rest] = ULTRAFAST_STEPS.map((step, index) => (
     <FeatureTile
       key={step.name}
       step={step}
       index={index}
-      onShowMe={onShowMe}
+      open={open}
+      pictureId={pictureIds[index]}
     />
   ))
   return (
@@ -282,13 +284,24 @@ function FeatureTiles({
       className="flex flex-col gap-3.5"
     >
       <div className="flex flex-col gap-0.5">
-        <h2
-          id="ultrafast-features"
-          className="font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]"
-        >
-          What’s in ultrafast
-        </h2>
-        <p className="text-[14px] text-ink-2">
+        <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+          <h2
+            id="ultrafast-features"
+            className="font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]"
+          >
+            What’s in ultrafast
+          </h2>
+          <button
+            type="button"
+            aria-expanded={open}
+            aria-controls={pictureIds.join(' ')}
+            onClick={() => setOpen((was) => !was)}
+            className="rounded-sm font-semibold text-[14px] text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {open ? 'Hide details' : 'Show details'}
+          </button>
+        </div>
+        <p className="text-[19px] text-ink-2 leading-[1.3]">
           <UltrafastWordmark /> is the new pro plan on BrowserOS, with three
           benefits.
         </p>
@@ -297,8 +310,7 @@ function FeatureTiles({
         {first}
         {/* From md up the lower boxes share two rows, header and picture (each
             box is a subgrid of them), so both headers take the taller one's
-            height and both pictures start on one line however the lines wrap.
-            Show me sits at the foot of the header, so it lines up too. */}
+            height and both pictures start on one line however the lines wrap. */}
         <div className="grid gap-4 md:grid-cols-2 md:grid-rows-[auto_1fr] md:gap-y-0">
           {rest}
         </div>
@@ -307,15 +319,21 @@ function FeatureTiles({
   )
 }
 
-/** One feature: its headline, its line and Show me, over its picture. The first is wide. */
+/**
+ * One feature: its headline and its line, over its picture while details are
+ * shown. The first is wide, its picture beside the words.
+ */
 function FeatureTile({
   step,
   index,
-  onShowMe,
+  open,
+  pictureId,
 }: {
   step: UltrafastStep
   index: number
-  onShowMe?: (step: number) => void
+  /** Whether the pictures are showing; Hide details above the boxes sets it. */
+  open: boolean
+  pictureId: string
 }) {
   const wide = index === 0
   return (
@@ -323,7 +341,7 @@ function FeatureTile({
       className={cn(
         'gap-0 overflow-hidden border-border-2 bg-card p-0 shadow-card',
         wide
-          ? 'lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]'
+          ? open && 'lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]'
           : 'md:row-span-2 md:grid md:grid-rows-subgrid',
       )}
     >
@@ -340,28 +358,19 @@ function FeatureTile({
         <p className="text-[14px] text-ink-2">
           <Highlight text={step.line} phrase={step.highlight} />
         </p>
-        {onShowMe ? (
-          <button
-            type="button"
-            aria-label={`Show me ${step.name}`}
-            onClick={() => onShowMe(index)}
-            className={cn(
-              'rounded-sm font-semibold text-[14px] text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring',
-              !wide && 'md:mt-auto',
-            )}
-          >
-            Show me
-          </button>
-        ) : null}
       </div>
-      <div
-        className={cn(
-          'flex-1 border-border-2 border-t bg-accent-tint px-6 py-5',
-          wide && 'lg:flex lg:items-center lg:border-t-0 lg:border-l',
-        )}
-      >
-        <UltrafastPicture step={index} />
-      </div>
+      {/* Left out, not hidden: the wide picture's lg:flex would beat [hidden]. */}
+      {open ? (
+        <div
+          id={pictureId}
+          className={cn(
+            'flex-1 border-border-2 border-t bg-accent-tint px-6 py-5',
+            wide && 'lg:flex lg:items-center lg:border-t-0 lg:border-l',
+          )}
+        >
+          <UltrafastPicture step={index} />
+        </div>
+      ) : null}
     </Card>
   )
 }

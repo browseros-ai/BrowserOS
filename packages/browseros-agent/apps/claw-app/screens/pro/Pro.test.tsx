@@ -630,14 +630,12 @@ describe('the ultrafast page', () => {
   it('tests that Free shows the monthly price, the way in with a key, and the questions', async () => {
     await mount()
 
-    expect(text()).toContain(
-      'The new Pro plan for BrowserOS neo to give you superpowers.',
-    )
+    expect(text()).toContain('The pro plan to get more out of BrowserOS neo.')
     expect(text()).not.toContain('Illustration')
     expect(text()).toContain('Save your tokens')
     expect(text()).toContain('Skills run in seconds')
     expect(text()).toContain('Multi-profile mode')
-    expect(button('Show me Fewer steps')).toBeTruthy()
+    expect(button('Hide details')).toBeTruthy()
     expect(text()).toContain('$20a month')
     expect(text()).toContain('Cancel any time.')
     expect(text()).toContain('2 months free')
@@ -648,7 +646,7 @@ describe('the ultrafast page', () => {
     expect(button('Who sees my card?')).toBeTruthy()
     expect(button('Does neo change sites without asking?')).toBeTruthy()
     for (const question of container.querySelectorAll(
-      'button[aria-expanded]',
+      '[aria-labelledby="ultrafast-questions"] button[aria-expanded]',
     )) {
       expect(question.getAttribute('aria-expanded')).toBe('false')
     }
@@ -657,7 +655,7 @@ describe('the ultrafast page', () => {
       'Your skills keep working, with your agent at normal speed.',
     )
     expect(text()).toContain(
-      'This plan helps support future development of BrowserOS neo! 💙',
+      'Thank you for supporting the future development of BrowserOS neo! 💙',
     )
     expect(text()).not.toContain('Thanks for helping')
     await click('What does my plan pay for?')
@@ -666,28 +664,27 @@ describe('the ultrafast page', () => {
     )
   })
 
-  it('tests that Free shows the heading, the intro and all three features with their lines and Show me', async () => {
+  it('tests that Free shows the heading, the intro and all three features with their lines, pictures hideable together', async () => {
     await mount()
 
     const heading = features().querySelector('h2')
     expect(heading?.textContent).toBe('What’s in ultrafast')
     expect(heading?.getAttribute('class')).not.toContain('sr-only')
-    expect(heading?.nextElementSibling?.textContent).toBe(
+    expect(heading?.parentElement?.nextElementSibling?.textContent).toBe(
       'ultrafast is the new pro plan on BrowserOS, with three benefits.',
     )
     expect(featureLines()).toEqual(FEATURE_LINES)
     expect(
       [...features().querySelectorAll('mark')].map((mark) => mark.textContent),
     ).toEqual(['ultrafast skill', 'personal profile'])
-    for (const name of [
-      'Fewer steps',
-      'ultrafast skills',
-      'Browser profiles',
-    ]) {
-      expect(button(`Show me ${name}`)).toBeTruthy()
-    }
-    await click('Show me ultrafast skills')
-    expect(dialog().getAttribute('aria-label')).toBe('ultrafast skills')
+    expect(features().querySelectorAll('figure')).toHaveLength(3)
+    await click('Hide details')
+    expect(features().querySelectorAll('figure')).toHaveLength(0)
+    expect(featureLines()).toEqual(FEATURE_LINES)
+    expect(button('Show details').getAttribute('aria-expanded')).toBe('false')
+    await click('Show details')
+    expect(features().querySelectorAll('figure')).toHaveLength(3)
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
   })
 
   it('tests that Yearly shows the yearly price and what it works out to', async () => {
@@ -745,36 +742,12 @@ describe('the ultrafast page', () => {
     expect(button('Cancel ultrafast')).toBeTruthy()
     expect(text()).toContain('What’s in ultrafast')
     expect(featureLines()).toEqual(FEATURE_LINES)
-    for (const name of [
-      'Fewer steps',
-      'ultrafast skills',
-      'Browser profiles',
-    ]) {
-      expect(button(`Show me ${name}`)).toBeTruthy()
-    }
+    expect(button('Hide details')).toBeTruthy()
     expect(text()).toContain(
       'Next on Nov 27, 2026. Stripe emails you a receipt each time.',
     )
     expect(text()).not.toContain('Get ultrafast')
     expectNoKeyAnywhere()
-  })
-
-  it('tests that Show me opens the pictures at the one chosen, and Skip closes them', async () => {
-    server.plan = async () => PRO
-    await mount()
-    expect(container.querySelector('[role="dialog"]')).toBeNull()
-
-    await click('Show me ultrafast skills')
-    expect(dialog().getAttribute('aria-label')).toBe('ultrafast skills')
-    expect(dialog().textContent).toContain('Skills run in seconds')
-    expect(dialog().textContent).not.toContain('Welcome to ultrafast')
-
-    await click('Skip', dialog())
-    expect(container.querySelector('[role="dialog"]')).toBeNull()
-
-    await click('Show me Browser profiles')
-    expect(dialog().textContent).toContain('Multi-profile mode')
-    expect(button('Start using ultrafast', dialog())).toBeTruthy()
   })
 
   it('tests that Ending offers Keep ultrafast and keeps it', async () => {
