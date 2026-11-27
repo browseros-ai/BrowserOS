@@ -554,12 +554,13 @@ function features(): Element {
 }
 
 /** Each feature box's headline and the line under it. */
-function featureLines(): string[][] {
-  return [...features().querySelectorAll('h3')].map((title) => [
+function featureTitles(): string[] {
+  return [...features().querySelectorAll('h3')].map((title) =>
     (title.textContent ?? '').trim(),
-    (title.nextElementSibling?.textContent ?? '').trim(),
-  ])
+  )
 }
+
+const FEATURE_NAMES = ['Fewer steps', 'ultrafast skills', 'Browser profiles']
 
 const FEATURE_LINES = [
   [
@@ -635,7 +636,7 @@ describe('the ultrafast page', () => {
     expect(text()).toContain('Save your tokens')
     expect(text()).toContain('Skills run in seconds')
     expect(text()).toContain('Multi-profile mode')
-    expect(button('Hide details')).toBeTruthy()
+    expect(button('Show me Fewer steps')).toBeTruthy()
     expect(text()).toContain('$20a month')
     expect(text()).toContain('Cancel any time.')
     expect(text()).toContain('2 months free')
@@ -664,27 +665,34 @@ describe('the ultrafast page', () => {
     )
   })
 
-  it('tests that Free shows the heading, the intro and all three features with their lines, pictures hideable together', async () => {
+  it('tests that Free shows the heading, the intro and three boxes, each line one Show me away', async () => {
     await mount()
 
     const heading = features().querySelector('h2')
     expect(heading?.textContent).toBe('What’s in ultrafast')
     expect(heading?.getAttribute('class')).not.toContain('sr-only')
-    expect(heading?.parentElement?.nextElementSibling?.textContent).toBe(
+    expect(heading?.nextElementSibling?.textContent).toBe(
       'ultrafast is the new pro plan on BrowserOS, with three benefits.',
     )
-    expect(featureLines()).toEqual(FEATURE_LINES)
+    expect(featureTitles()).toEqual(FEATURE_LINES.map(([title]) => title))
+    expect(features().querySelectorAll('figure')).toHaveLength(3)
+    for (const [, line] of FEATURE_LINES) {
+      expect(features().textContent).not.toContain(line)
+    }
+
+    for (const [index, name] of FEATURE_NAMES.entries()) {
+      await click(`Show me ${name}`)
+      expect(dialog().getAttribute('aria-label')).toBe(name)
+      expect(dialog().textContent).toContain(FEATURE_LINES[index]?.[1] ?? '')
+      expect(dialog().textContent).not.toContain('Start using ultrafast')
+      await click('Skip', dialog())
+      expect(container.querySelector('[role="dialog"]')).toBeNull()
+    }
+    await click('Show me Browser profiles')
     expect(
-      [...features().querySelectorAll('mark')].map((mark) => mark.textContent),
-    ).toEqual(['ultrafast skill', 'personal profile'])
-    expect(features().querySelectorAll('figure')).toHaveLength(3)
-    await click('Hide details')
-    expect(features().querySelectorAll('figure')).toHaveLength(0)
-    expect(featureLines()).toEqual(FEATURE_LINES)
-    expect(button('Show details').getAttribute('aria-expanded')).toBe('false')
-    await click('Show details')
-    expect(features().querySelectorAll('figure')).toHaveLength(3)
-    expect(container.querySelector('[role="dialog"]')).toBeNull()
+      [...dialog().querySelectorAll('mark')].map((mark) => mark.textContent),
+    ).toEqual(['personal profile'])
+    expect(button('Done', dialog())).toBeTruthy()
   })
 
   it('tests that Yearly shows the yearly price and what it works out to', async () => {
@@ -741,8 +749,10 @@ describe('the ultrafast page', () => {
     expect(button('Rename DESKTOP-4FQ7K2L')).toBeTruthy()
     expect(button('Cancel ultrafast')).toBeTruthy()
     expect(text()).toContain('What’s in ultrafast')
-    expect(featureLines()).toEqual(FEATURE_LINES)
-    expect(button('Hide details')).toBeTruthy()
+    expect(featureTitles()).toEqual(FEATURE_LINES.map(([title]) => title))
+    for (const name of FEATURE_NAMES) {
+      expect(button(`Show me ${name}`)).toBeTruthy()
+    }
     expect(text()).toContain(
       'Next on Nov 27, 2026. Stripe emails you a receipt each time.',
     )
@@ -836,6 +846,24 @@ describe('what ultrafast has saved', () => {
       '/audit/pursue-1',
     ])
     expect(text()).not.toContain('Sample numbers')
+  })
+
+  it('tests that Show me opens the pictures at the one chosen, and Skip closes them', async () => {
+    server.plan = async () => PRO
+    await mount()
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+
+    await click('Show me ultrafast skills')
+    expect(dialog().getAttribute('aria-label')).toBe('ultrafast skills')
+    expect(dialog().textContent).toContain('Skills run in seconds')
+    expect(dialog().textContent).not.toContain('Welcome to ultrafast')
+
+    await click('Skip', dialog())
+    expect(container.querySelector('[role="dialog"]')).toBeNull()
+
+    await click('Show me Browser profiles')
+    expect(dialog().textContent).toContain('Multi-profile mode')
+    expect(button('Start using ultrafast', dialog())).toBeTruthy()
   })
 
   it('tests that before the first run it starts at zero and offers Show me how', async () => {
