@@ -115,8 +115,8 @@ function ProfilePicture() {
         {/* One flex item, so the pill's gap stays out of the sentence. */}
         <span>
           <Highlight
-            text="Post this on my personal X account"
-            phrase="personal X account"
+            text="Post this on my personal Twitter account"
+            phrase="personal Twitter account"
           />
         </span>
       </span>

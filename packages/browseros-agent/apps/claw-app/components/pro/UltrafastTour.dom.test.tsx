@@ -231,7 +231,7 @@ describe('UltrafastTour', () => {
     expect(line()).toBe(
       'Keep separate profiles for personal and work, each with its own logins. Tell your agent “use my personal profile” and it does.',
     )
-    expect(marked()).toEqual(['personal X account'])
+    expect(marked()).toEqual(['personal Twitter account'])
     const picked = [...dialog().querySelectorAll('li')].filter((row) =>
       row.textContent?.includes('Using this'),
     )
