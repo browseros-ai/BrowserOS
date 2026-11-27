@@ -18,7 +18,6 @@ import {
   CollapsibleTrigger,
 } from '@/components/motion/collapsible'
 import { CancelProDialog } from '@/components/pro/CancelProDialog'
-import { Highlight } from '@/components/pro/Highlight'
 import { KeySection } from '@/components/pro/KeySection'
 import {
   StepRacePicture,
@@ -80,6 +79,11 @@ export function Pro() {
   const [cancelOpen, setCancelOpen] = useState(false)
   const [tourAt, setTourAt] = useState<number | null>(null)
   const [tourOpens, setTourOpens] = useState(0)
+  // Show me how, on a feature box or the savings hero, opens the tour at that feature.
+  const showMe = (step: number) => {
+    setTourOpens((count) => count + 1)
+    setTourAt(step)
+  }
 
   if (plan.isPending) {
     return (
@@ -142,13 +146,7 @@ export function Pro() {
       {pro ? (
         <>
           <PageHeader title={TITLE} />
-          <SavingsHero
-            savings={savings}
-            onShowMe={() => {
-              setTourOpens((count) => count + 1)
-              setTourAt(0)
-            }}
-          />
+          <SavingsHero savings={savings} onShowMe={() => showMe(0)} />
           <PlanPanel
             plan={current}
             portal={portal}
@@ -157,12 +155,7 @@ export function Pro() {
             trialLength={monthlyTrialDays(pricing.data) || DEFAULT_TRIAL_DAYS}
           />
           {current.onKey ? <KeySection planKey={planKey} /> : null}
-          <FeatureTiles
-            onShowMe={(step) => {
-              setTourOpens((count) => count + 1)
-              setTourAt(step)
-            }}
-          />
+          <FeatureTiles onShowMe={showMe} />
         </>
       ) : (
         <>
@@ -172,8 +165,9 @@ export function Pro() {
           >
             <div className="flex min-w-0 flex-col items-start gap-3.5">
               <PageHeader title={TITLE} />
-              <p className="max-w-[16ch] font-extrabold text-[28px] text-cyanotype-ink leading-[1.12] tracking-[-0.03em] md:text-[34px]">
-                More from your AI agents.
+              <p className="max-w-[20ch] font-extrabold text-[28px] text-cyanotype-ink leading-[1.12] tracking-[-0.03em] md:text-[34px]">
+                The pro plan to <span className="text-primary">get more</span>{' '}
+                out of BrowserOS neo.
               </p>
               <div
                 aria-live="polite"
@@ -201,7 +195,7 @@ export function Pro() {
               <StepRacePicture large />
             </div>
           </section>
-          <FeatureTiles />
+          <FeatureTiles onShowMe={showMe} />
           {idle && prices ? (
             <section
               aria-label="Get ultrafast again"
@@ -253,6 +247,7 @@ export function Pro() {
         open={checkout.welcoming || tourAt !== null}
         startAt={tourAt ?? 0}
         welcome={checkout.welcoming}
+        on={pro}
         onClose={() => {
           if (checkout.welcoming) checkout.closeWelcome()
           setTourAt(null)
@@ -265,15 +260,11 @@ export function Pro() {
 // ---------------------------------------------------------------------------
 
 /**
- * What ultrafast adds, one box each, the same before and after signup. Only
- * Show me differs: it appears once ultrafast is on and opens the tour there.
+ * What ultrafast adds, one box each, the same before and after signup: a
+ * headline and a picture. Show me how opens the tour at that feature, where the
+ * line explaining it sits beside the same picture.
  */
-function FeatureTiles({
-  onShowMe,
-}: {
-  /** Set once ultrafast is on: opens the welcome at that picture. */
-  onShowMe?: (step: number) => void
-}) {
+function FeatureTiles({ onShowMe }: { onShowMe: (step: number) => void }) {
   const [first, ...rest] = ULTRAFAST_STEPS.map((step, index) => (
     <FeatureTile
       key={step.name}
@@ -294,7 +285,7 @@ function FeatureTiles({
         >
           What’s in ultrafast
         </h2>
-        <p className="text-[14px] text-ink-2">
+        <p className="text-[19px] text-ink-2 leading-[1.3]">
           <UltrafastWordmark /> is the new pro plan on BrowserOS, with three
           benefits.
         </p>
@@ -303,8 +294,8 @@ function FeatureTiles({
         {first}
         {/* From md up the lower boxes share two rows, header and picture (each
             box is a subgrid of them), so both headers take the taller one's
-            height and both pictures start on one line however the lines wrap.
-            Show me sits at the foot of the header, so it lines up too. */}
+            height and both pictures start on one line however the titles wrap.
+            Show me how sits at the foot of the header, so it lines up too. */}
         <div className="grid gap-4 md:grid-cols-2 md:grid-rows-[auto_1fr] md:gap-y-0">
           {rest}
         </div>
@@ -313,7 +304,7 @@ function FeatureTiles({
   )
 }
 
-/** One feature: its headline, its line and Show me, over its picture. The first is wide. */
+/** One feature: its headline and Show me how, over its picture. The first is wide. */
 function FeatureTile({
   step,
   index,
@@ -321,7 +312,7 @@ function FeatureTile({
 }: {
   step: UltrafastStep
   index: number
-  onShowMe?: (step: number) => void
+  onShowMe: (step: number) => void
 }) {
   const wide = index === 0
   return (
@@ -335,7 +326,7 @@ function FeatureTile({
     >
       <div
         className={cn(
-          'flex flex-col items-start gap-2 px-6 pt-[22px] pb-5',
+          'flex flex-col items-start gap-3.5 px-6 pt-[22px] pb-5',
           wide && 'lg:justify-center',
         )}
       >
@@ -343,22 +334,17 @@ function FeatureTile({
           <step.icon aria-hidden className="size-5 shrink-0 text-primary" />
           {step.title}
         </h3>
-        <p className="text-[14px] text-ink-2">
-          <Highlight text={step.line} phrase={step.highlight} />
-        </p>
-        {onShowMe ? (
-          <button
-            type="button"
-            aria-label={`Show me ${step.name}`}
-            onClick={() => onShowMe(index)}
-            className={cn(
-              'rounded-sm font-semibold text-[14px] text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring',
-              !wide && 'md:mt-auto',
-            )}
-          >
-            Show me
-          </button>
-        ) : null}
+        <button
+          type="button"
+          aria-label={`Show me how, ${step.name}`}
+          onClick={() => onShowMe(index)}
+          className={cn(
+            'rounded-sm font-semibold text-[14px] text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring',
+            !wide && 'md:mt-auto',
+          )}
+        >
+          Show me how
+        </button>
       </div>
       <div
         className={cn(

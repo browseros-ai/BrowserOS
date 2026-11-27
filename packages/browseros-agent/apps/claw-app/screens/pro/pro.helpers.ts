@@ -20,7 +20,7 @@ export interface UltrafastStep {
   name: string
   title: string
   line: string
-  /** The words of `line` set in the yellow highlight, on the feature card and in the tour. */
+  /** The words of `line` set in bold blue, on the feature card and in the tour. */
   highlight?: string
 }
 
@@ -30,14 +30,14 @@ export const ULTRAFAST_STEPS: readonly UltrafastStep[] = [
     icon: Gauge,
     name: 'Fewer steps',
     title: 'Save your tokens',
-    line: 'Whenever possible, a small model built into neo takes steps for your agent. Fewer steps, fewer tokens.',
+    line: 'Whenever possible, a small model built into the browser takes steps for your agent. Fewer steps, fewer tokens.',
   },
   {
     icon: Zap,
     name: 'ultrafast skills',
     title: 'Skills run in seconds',
     line: 'Turn a task in History into a skill in one click. On compatible websites, it becomes an ultrafast skill that uses NO tokens and runs the full task in seconds.',
-    highlight: 'NO tokens',
+    highlight: 'ultrafast skill',
   },
   {
     icon: UserRoundCheck,
@@ -49,7 +49,7 @@ export const ULTRAFAST_STEPS: readonly UltrafastStep[] = [
 
 /** What a plan pays for, as approved: one line on the plan picker, before buying. */
 export const BACKING_LINE =
-  'Your plan also helps with long-term development of BrowserOS core features.'
+  'Thank you for supporting the future development of BrowserOS neo! 💙'
 
 /** The same, as thanks, once someone pays or cancels. */
 export const BACKING_THANKS =
@@ -131,14 +131,6 @@ export function formatPrice(price: Pick<PlanPrice, 'amount' | 'currency'>) {
   return priceFormat(currency, Number.isInteger(value) ? 0 : digits).format(
     value,
   )
-}
-
-/** What a year costs per month, for "Works out to $16.67 a month." */
-export function monthlyEquivalent(year: PlanPrice): string {
-  return formatPrice({
-    amount: Math.round(year.amount / 12),
-    currency: year.currency,
-  })
 }
 
 /** How many months a year saves against paying monthly, when it saves any. */

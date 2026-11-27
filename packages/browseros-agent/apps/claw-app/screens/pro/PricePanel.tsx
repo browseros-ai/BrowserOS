@@ -22,7 +22,6 @@ import {
   formatPrice,
   isBillingPeriod,
   keyHasEnded,
-  monthlyEquivalent,
   monthsFree,
   monthsFreeLabel,
   PLAN_UNCHECKED,
@@ -135,31 +134,27 @@ export function PricePanel({
         trial={trial}
         onBuy={onBuy}
       />
-      {trial ? (
-        <>
-          <p className="max-w-[46ch] text-[14px] text-ink-2">
+      {/* Monthly and Yearly read the same: the terms, then the thanks in
+          bold, in one paragraph, with the way in by key on its own line. */}
+      <p className="max-w-[46ch] text-[14px] text-ink-2">
+        {trial ? (
+          <>
             Free until{' '}
             <strong className="text-cyanotype-ink">
               {formatDate(trialEndFrom(Date.now(), trialDays))}
             </strong>
             , then {amount} a month. Cancel before then and you won’t be
             charged.
-          </p>
-          {useKey ? <p className="text-[13.5px]">{useKey}</p> : null}
-        </>
-      ) : (
-        <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[13.5px] text-ink-3">
-          <span>
-            {price.interval === 'year'
-              ? `Works out to ${monthlyEquivalent(price)} a month. `
-              : null}
+          </>
+        ) : (
+          <>
             Cancel any time.
             {trialDays > 0 ? ' The free trial comes with Monthly.' : null}
-          </span>
-          {useKey}
-        </p>
-      )}
-      <p className="max-w-[46ch] text-[13.5px] text-ink-3">{BACKING_LINE}</p>
+          </>
+        )}{' '}
+        <strong className="text-cyanotype-ink">{BACKING_LINE}</strong>
+      </p>
+      {useKey ? <p className="text-[13.5px]">{useKey}</p> : null}
     </>
   )
 }
