@@ -118,7 +118,7 @@ browseros build --preset release --product browseros --arch arm64 \
 
 # Release-shaped Windows build against a checkout you already have (one line —
 # a Windows path and a shell line-continuation both want the backslash).
-browseros build --preset release --provision none --clean --product browserclaw --arch x64 --sign --upload --chromium-src C:\src\chromium-3\src
+browseros build --preset release --provision none --no-clean --product browserclaw --arch x64 --sign --upload --chromium-src C:\src\chromium-3\src
 
 # Resume after a failure, without recompiling.
 browseros build --preset release --from sign_macos
