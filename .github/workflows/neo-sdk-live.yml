@@ -68,7 +68,7 @@ jobs:
           node-version: 26.13.0
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.98.0
+        uses: dtolnay/rust-toolchain@1.120.0
 
       - name: Cache the SDK live build
         uses: Swatinem/rust-cache@v2
