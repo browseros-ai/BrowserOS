@@ -2,9 +2,12 @@ use std::collections::HashSet;
 
 use thiserror::Error;
 
-use crate::tree::{DocId, NodeId, SnapshotTree, TreeDoc, TreeNode};
+use neo_snapshot::template::AriaTemplateNode;
+
+use crate::tree::{AriaRoot, DocId, NameCache, NodeId, SnapshotTree, TreeDoc, TreeNode};
 
 use super::accessible_text::AccessibleText;
+use super::aria_template::{self, AriaTemplateError};
 use super::attribute_selector;
 use super::parsed_selector::{ParsedSelector, SelectorBody, SelectorPart};
 use super::ref_resolver::RefResolver;
@@ -13,9 +16,9 @@ use super::role_query::{RoleQuery, RoleQueryError};
 use super::tree_matches::TreeMatches;
 
 /// A selector chunk that Rust evaluates entirely over one [`SnapshotTree`]: `role`,
-/// `internal:role`, `aria-ref` and `internal:describe` parts, `nth`, and the combinators
-/// `internal:has`, `internal:has-not`, `internal:and`, `internal:or` and `internal:chain` whose
-/// nested selectors hold only such parts (design 5.2, 5.3).
+/// `internal:role`, `aria-ref`, `aria-template` and `internal:describe` parts, `nth`, and the
+/// combinators `internal:has`, `internal:has-not`, `internal:and`, `internal:or` and
+/// `internal:chain` whose nested selectors hold only such parts (design 5.2, 5.3).
 ///
 /// It is the tree half of the locator engine. Planning a chunk that mixes tree and page parts,
 /// and moving sets between the two, is `ChunkPlan`'s and `ChunkRun`'s (design 5.4). Evaluation
@@ -50,6 +53,10 @@ enum Step {
     Role(Result<RoleMatch, RoleQueryError>),
     /// `aria-ref`, by its raw body.
     AriaRef(String),
+    /// `aria-template`. Upstream parses the body each time the engine runs, so a body that is
+    /// no template fails only once a root reaches it. A page form's stand-in for a template
+    /// leaf holds [`AriaTemplateError::OutsideTree`] here ([`TreeStage::template_outside_tree`]).
+    AriaTemplate(Result<AriaTemplateNode, AriaTemplateError>),
     /// `internal:describe`: each element root itself.
     Describe,
     /// `nth`, its body already converted as JavaScript's unary `+` does.
@@ -115,6 +122,9 @@ pub enum TreeStageError {
     /// A captured selector (`*`) also held an `nth` part (`injectedScript.ts:378-379`).
     #[error("Can't query n-th element in a request with the capture.")]
     NthWithCapture,
+    /// An `aria-template` part's body, its match, or the root it was reached from.
+    #[error(transparent)]
+    AriaTemplate(#[from] AriaTemplateError),
 }
 
 impl TreeStage {
@@ -144,6 +154,18 @@ impl TreeStage {
             }
         };
         Ok(Self { body })
+    }
+
+    /// The candidate a page form holds for an `aria-template` leaf: one step that refuses the
+    /// query as soon as a root reaches it, since a template's matches depend on its root and no
+    /// candidate set can stand for them. The page throws the refusal where upstream's engine
+    /// would have run, and never sees the template.
+    pub(super) fn template_outside_tree() -> Self {
+        Self {
+            body: StageBody::Steps(vec![Step::AriaTemplate(Err(
+                AriaTemplateError::OutsideTree,
+            ))]),
+        }
     }
 
     /// Evaluates the stage over `tree` from `scope`, reading names and descriptions through
@@ -186,6 +208,9 @@ fn plan_part(part: &SelectorPart) -> Result<Step, NotTreeStage> {
             Step::Role(role_match(body, RoleEngine::InternalRole))
         }
         ("aria-ref", SelectorBody::Text(body)) => Step::AriaRef(body.clone()),
+        ("aria-template", SelectorBody::Text(body)) => {
+            Step::AriaTemplate(aria_template::parse(body))
+        }
         ("internal:describe", SelectorBody::Text(_)) => Step::Describe,
         ("nth", SelectorBody::Text(body)) => {
             Step::Nth(attribute_selector::js_string_to_number(body))
@@ -260,6 +285,7 @@ impl Evaluator<'_> {
                     self.sort_in_dom_order(roots)
                 }
                 Step::Role(role) => self.role(role, &roots)?,
+                Step::AriaTemplate(template) => self.aria_template(template, &roots)?,
                 Step::AriaRef(body) => {
                     let mut next = NodeSet::default();
                     for &scope in &roots {
@@ -325,6 +351,35 @@ impl Evaluator<'_> {
                     next.insert(node.id());
                 }
                 cursor = next_in_doc(node);
+            }
+        }
+        Ok(next.into_nodes())
+    }
+
+    /// The `aria-template` engine over every root, each matched from its own tree as upstream's
+    /// engine runs per root; a root inside another root is matched again, since its top-most
+    /// matches can lie inside the outer root's. A document root's tree is its document's.
+    fn aria_template(
+        &self,
+        template: &Result<AriaTemplateNode, AriaTemplateError>,
+        roots: &[NodeId],
+    ) -> Result<Vec<NodeId>, TreeStageError> {
+        if roots.is_empty() {
+            return Ok(Vec::new());
+        }
+        let template = template.as_ref().map_err(Clone::clone)?;
+        // Emission needs the tree's own name cache, not the `AccessibleText` seam, so the step
+        // builds one and every root's preparation shares it.
+        let names = NameCache::new(self.tree);
+        let mut next = NodeSet::default();
+        for &root in roots {
+            let from = match self.tree.node(root) {
+                Some(node) if !self.is_element(root) => AriaRoot::Document(node.doc()),
+                Some(_) => AriaRoot::Subtree(root),
+                None => continue,
+            };
+            for id in aria_template::matches(self.tree, &names, from, root, template)? {
+                next.insert(id);
             }
         }
         Ok(next.into_nodes())

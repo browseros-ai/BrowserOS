@@ -63,8 +63,8 @@ use std::fmt;
 use std::ops::ControlFlow;
 
 use neo_snapshot_apc::select::{
-    self, AccessibleText, ChunkPlan, PageForm, PlannedStage, RefResolver, RoleQueryError, Scope,
-    StrictPreview, StrictViolation, TreeMatches, TreeStage, TreeStageError,
+    self, AccessibleText, AriaTemplateError, ChunkPlan, PageForm, PlannedStage, RefResolver,
+    RoleQueryError, Scope, StrictPreview, StrictViolation, TreeMatches, TreeStage, TreeStageError,
 };
 use neo_snapshot_apc::tree::{
     DocId, DocToken, NodeId, NodeKey, OptionSlot, SnapshotTree, TreeNode,
@@ -826,11 +826,19 @@ fn thrown(error: &TreeStageError) -> ChunkOutcome {
 fn class_of(error: &TreeStageError) -> ErrorClass {
     match error {
         // `parseAttributeSelector` throws `InvalidSelectorError`, which the probe classifies
-        // `selector` (its message stands alone).
-        TreeStageError::Role(RoleQueryError::AttributeSelector(_)) => ErrorClass::Selector,
+        // `selector` (its message stands alone). A template the script wrote wrong is the
+        // selector's fault too, worded the same way.
+        TreeStageError::Role(RoleQueryError::AttributeSelector(_))
+        | TreeStageError::AriaTemplate(
+            AriaTemplateError::Body { .. } | AriaTemplateError::Template(_),
+        ) => ErrorClass::Selector,
         // `createStacklessError` and the role engine's validation throw a plain `Error`, which
         // the probe classifies `script` (`Error: ` before its message).
         TreeStageError::Role(_) | TreeStageError::NthWithCapture => ErrorClass::Script,
+        // A template Neo cannot match where the script asked: Neo's limit, not the script's.
+        TreeStageError::AriaTemplate(
+            AriaTemplateError::TooDeep(_) | AriaTemplateError::OutsideTree,
+        ) => ErrorClass::Unsupported,
     }
 }
 

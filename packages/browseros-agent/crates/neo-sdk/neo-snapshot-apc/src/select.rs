@@ -4,8 +4,9 @@
 //! The JS prelude keeps parsing selector strings with Playwright's vendored `splitSelectorByFrame`
 //! and sends parsed per-frame chunks across the bridge. This subsystem decodes each chunk into a
 //! typed [`ParsedSelector`], parses the bodies of parts Rust evaluates (`role` and
-//! `internal:role`), and validates role attributes with upstream Playwright 1.64.1 error text. A
-//! chunk made only of such parts becomes a [`TreeStage`], which selects elements from one
+//! `internal:role`, and `aria-template`, matched as `toMatchAriaSnapshot` matches), and validates
+//! role attributes with upstream Playwright 1.64.1 error text. A chunk made only of such parts
+//! becomes a [`TreeStage`], which selects elements from one
 //! [`SnapshotTree`](crate::tree::SnapshotTree) with the semantics of the vendored
 //! `InjectedScript.querySelectorAll`:
 //!
@@ -31,6 +32,7 @@
 //! ref table belongs to engine chunk 5.
 
 mod accessible_text;
+mod aria_template;
 mod attribute_selector;
 mod chunk_plan;
 mod js_regex;
@@ -43,6 +45,7 @@ mod tree_matches;
 mod tree_stage;
 
 pub use accessible_text::AccessibleText;
+pub use aria_template::AriaTemplateError;
 pub use attribute_selector::{
     AttributeSelector, AttributeSelectorError, AttributeSelectorOperator, AttributeSelectorPart,
     AttributeValue, UnquotedStrings, parse_attribute_selector,

@@ -28,6 +28,12 @@
 //! one probe call per stage. A tree run keeps a page form too, for a set whose roots the tree has
 //! no node for (design 5.4, path 3).
 //!
+//! An `aria-template` leaf is a tree part, but no candidate set stands for it: upstream keeps
+//! only the top-most matches below each root, the root's own node included, so its matches
+//! inside R are not the document's matches inside R. A page form holds a candidate that refuses
+//! once a root reaches it (`unsupported`), so a template runs over the tree or not at all, and
+//! never reaches the page, whose engine for it is a stand-in that throws.
+//!
 //! Planning also does what the probe does before it queries anything: it refuses an engine name
 //! the page's table lacks, with the probe's words. The call-scoped names are among them, so agent
 //! input can never reach the engines a stage registers. The check has to happen here, on the
@@ -120,8 +126,9 @@ pub enum PlannedStage {
     Page(PageForm),
 }
 
-/// A run of tree parts: `role`, `internal:role` and `aria-ref` leaves, the combinators whose
-/// nested selectors hold only tree parts, and `nth` or `internal:describe` beside them.
+/// A run of tree parts: `role`, `internal:role`, `aria-ref` and `aria-template` leaves, the
+/// combinators whose nested selectors hold only tree parts, and `nth` or `internal:describe`
+/// beside them.
 #[derive(Clone, Debug)]
 pub struct TreeRun {
     stage: TreeStage,
@@ -372,7 +379,7 @@ enum Side {
 fn side(part: &SelectorPart) -> Option<Side> {
     let tree = match (part.name.as_str(), &part.body) {
         ("nth" | "internal:describe", _) => return None,
-        ("role" | "internal:role" | "aria-ref", SelectorBody::Text(_)) => true,
+        ("role" | "internal:role" | "aria-ref" | "aria-template", SelectorBody::Text(_)) => true,
         (
             "internal:has" | "internal:has-not" | "internal:and" | "internal:or" | "internal:chain",
             SelectorBody::Nested(nested),
@@ -441,18 +448,24 @@ fn substitute(selector: &ParsedSelector, candidates: &mut Vec<TreeStage>) -> Par
 }
 
 fn substitute_part(part: &SelectorPart, candidates: &mut Vec<TreeStage>) -> SelectorPart {
-    let engine = match (part.name.as_str(), &part.body) {
-        ("role" | "internal:role", SelectorBody::Text(_)) => Some(NEO_BELOW),
-        ("aria-ref", SelectorBody::Text(_)) => Some(NEO_INSIDE),
+    let leaf = || {
+        TreeStage::new(&ParsedSelector {
+            parts: vec![part.clone()],
+            capture: None,
+        })
+        .ok()
+    };
+    let substituted = match (part.name.as_str(), &part.body) {
+        ("role" | "internal:role", SelectorBody::Text(_)) => leaf().map(|leaf| (NEO_BELOW, leaf)),
+        ("aria-ref", SelectorBody::Text(_)) => leaf().map(|leaf| (NEO_INSIDE, leaf)),
+        // The inclusive engine, as a template's tree starts at its root; its candidate throws
+        // the refusal before it would scope anything.
+        ("aria-template", SelectorBody::Text(_)) => {
+            Some((NEO_INSIDE, TreeStage::template_outside_tree()))
+        }
         _ => None,
     };
-    let leaf = ParsedSelector {
-        parts: vec![part.clone()],
-        capture: None,
-    };
-    if let Some(engine) = engine
-        && let Ok(candidate) = TreeStage::new(&leaf)
-    {
+    if let Some((engine, candidate)) = substituted {
         let index = candidates.len();
         candidates.push(candidate);
         return SelectorPart {

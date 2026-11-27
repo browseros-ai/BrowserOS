@@ -493,6 +493,31 @@ impl PreparedAria {
         }
     }
 
+    /// The tree node each emitted node was made from, in the order [`Self::emit`] opens nodes,
+    /// `None` for a node made from none (a top-level text run). Every top root is a node and
+    /// [`AriaNodeSink`] makes one [`AriaNode`] per opened node, so the forest
+    /// [`Self::to_aria_tree`] builds has one node per entry, in this same preorder: that is how
+    /// `aria-template` traces a template match back to the element it names.
+    pub(crate) fn source_nodes(&self) -> Vec<Option<NodeId>> {
+        let mut sources = Vec::new();
+        let mut stack: Vec<PreparedNodeId> = self.top_roots.iter().rev().copied().collect();
+        while let Some(id) = stack.pop() {
+            sources.push(
+                self.docs
+                    .get(id.doc as usize)
+                    .and_then(|doc| doc.arena.nodes.get(id.node as usize))
+                    .and_then(|draft| draft.source_node),
+            );
+            if (&self).node(id).has_children {
+                stack.extend((&self).children(id).rev().filter_map(|child| match child {
+                    SourceChild::Node(child_id) => Some(child_id),
+                    SourceChild::Text(_) => None,
+                }));
+            }
+        }
+        sources
+    }
+
     /// Materializes this prepared tree into an owned [`AriaTree`] through [`AriaNodeSink`].
     #[must_use]
     pub fn to_aria_tree(&self) -> AriaTree {
@@ -830,7 +855,18 @@ impl SnapshotTree {
     /// be and the requested depth does not cut it shorter. A child document that deep becomes a
     /// partial frame instead.
     pub fn prepare_aria(&self, ask: AriaAsk<'_>) -> Result<PreparedAria, AriaTooDeep> {
-        prepare_aria_docs(self, ask)
+        prepare_aria_docs(self, ask, &NameCache::new(self))
+    }
+
+    /// [`Self::prepare_aria`] reading names through `names`, a cache of this tree, so callers
+    /// that prepare many small subtrees (`aria-template` from each root of a set) pay for the
+    /// capture-sized name tables once instead of once per subtree.
+    pub(crate) fn prepare_aria_with(
+        &self,
+        ask: AriaAsk<'_>,
+        names: &NameCache<'_>,
+    ) -> Result<PreparedAria, AriaTooDeep> {
+        prepare_aria_docs(self, ask, names)
     }
 
     /// Streams this tree's distilled, depth-bounded, multi-frame ARIA nodes into `sink`.
@@ -1229,7 +1265,11 @@ impl DraftArena {
     }
 }
 
-fn prepare_aria_docs(tree: &SnapshotTree, ask: AriaAsk<'_>) -> Result<PreparedAria, AriaTooDeep> {
+fn prepare_aria_docs(
+    tree: &SnapshotTree,
+    ask: AriaAsk<'_>,
+    name_cache: &NameCache<'_>,
+) -> Result<PreparedAria, AriaTooDeep> {
     let AriaAsk {
         root,
         mut mode,
@@ -1241,7 +1281,6 @@ fn prepare_aria_docs(tree: &SnapshotTree, ask: AriaAsk<'_>) -> Result<PreparedAr
     };
 
     let scale = if boxes { compute_box_scale(tree) } else { 1.0 };
-    let name_cache = NameCache::new(tree);
 
     let mut emitted_docs: Vec<Option<EmittedDoc>> = vec![None];
     let mut emit_order: Vec<usize> = Vec::new();
@@ -1249,7 +1288,7 @@ fn prepare_aria_docs(tree: &SnapshotTree, ask: AriaAsk<'_>) -> Result<PreparedAr
 
     while let Some(job) = job_stack.pop() {
         emit_order.push(job.job_idx);
-        let emitted = match emit_single_doc(tree, &name_cache, &mut mode, &job, boxes, scale) {
+        let emitted = match emit_single_doc(tree, name_cache, &mut mode, &job, boxes, scale) {
             Ok(frames) => {
                 // Only ai mode reads past an iframe: a child frame's snapshot hangs from its
                 // iframe's ref, and default mode mints none, so it reads one document as
