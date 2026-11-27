@@ -25,7 +25,7 @@ import { UltrafastDetailsDialog } from './UltrafastDetailsDialog'
 import { monthDay } from './ultrafast-details.helpers'
 
 export const TRY_TASK =
-  'On google.com/travel/flights, search one-way flights from Chennai to Singapore on 20 December and sort by price.'
+  'On google.com/travel/flights, search one-way flights from New York to San Francisco on 20 December and sort by price.'
 
 const WORDMARK = cn('text-[16px]', INK.ink)
 
