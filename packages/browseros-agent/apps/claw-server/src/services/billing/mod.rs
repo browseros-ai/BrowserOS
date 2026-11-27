@@ -312,6 +312,16 @@ impl Billing {
         {
             inner.pricing.lock().await.drop_copy();
         }
+        // The gateway refused a trial the cached copy still offers, likely because trials are
+        // paused, so the next pricing read asks again instead of promising it.
+        if let Ok(started) = &result
+            && started.trial_days == Some(0)
+        {
+            let mut pricing = inner.pricing.lock().await;
+            if pricing.offers_trial(plan, interval, interval_count.unwrap_or(1)) {
+                pricing.drop_copy();
+            }
+        }
         result
     }
 

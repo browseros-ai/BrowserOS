@@ -323,6 +323,64 @@ async fn trial_days_pass_through_from_pricing_and_the_checkout() -> anyhow::Resu
 }
 
 #[tokio::test]
+async fn a_refused_trial_drops_the_cached_pricing_that_offered_it() -> anyhow::Result<()> {
+    let gateway = FakeGateway::start().await?;
+    gateway.script(
+        "GET /v1/pricing",
+        200,
+        json!({"app": "claw", "plans": [{
+            "plan": "ultrafast",
+            "name": "ultrafast",
+            "description": null,
+            "features": ["claw.ultrafast"],
+            "trialDays": 7,
+            "prices": [
+                {"interval": "month", "intervalCount": 1, "amount": 2000, "currency": "usd", "trialDays": 7},
+                {"interval": "year", "intervalCount": 1, "amount": 20000, "currency": "usd", "trialDays": 0}
+            ]
+        }]}),
+        None,
+    );
+    let a = computer(Some(&gateway)).await?;
+    a.call("GET", "/api/v1/plan/pricing", None).await?;
+    assert_eq!(gateway.count("GET", "/v1/pricing"), 1);
+
+    let no_trial = json!({"checkoutId": "0b6f1c2e-4a5d-4e7f-9a1b-2c3d4e5f6a7b", "url": "https://checkout.example.com/c/pay/cs_test_trial", "trialDays": 0});
+    gateway.script("POST /v1/checkouts", 201, no_trial.clone(), None);
+    let yearly = a
+        .call(
+            "POST",
+            "/api/v1/plan/checkout",
+            Some(json!({"plan": "ultrafast", "interval": "year"})),
+        )
+        .await?;
+    assert_eq!(yearly.status, StatusCode::CREATED, "{}", yearly.raw);
+    a.call("GET", "/api/v1/plan/pricing", None).await?;
+    assert_eq!(
+        gateway.count("GET", "/v1/pricing"),
+        1,
+        "a price that never offered a trial keeps the copy"
+    );
+
+    gateway.script("POST /v1/checkouts", 201, no_trial, None);
+    let monthly = a
+        .call(
+            "POST",
+            "/api/v1/plan/checkout",
+            Some(json!({"plan": "ultrafast", "interval": "month"})),
+        )
+        .await?;
+    assert_eq!(monthly.status, StatusCode::CREATED, "{}", monthly.raw);
+    a.call("GET", "/api/v1/plan/pricing", None).await?;
+    assert_eq!(
+        gateway.count("GET", "/v1/pricing"),
+        2,
+        "the refused trial was no longer promised from the cache"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_gateway_that_is_down_or_unreachable_answers_503() -> anyhow::Result<()> {
     let gateway = FakeGateway::start().await?;
     gateway.set_down(true);
