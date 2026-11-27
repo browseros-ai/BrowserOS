@@ -50,10 +50,10 @@ export function StepRacePicture({ large = false }: { large?: boolean }) {
   )
 }
 
-/** A skill neo wrote, then how long it takes with and without your agent. */
+/** A skill neo wrote, then how long your agent takes to run it step by step or in one go. */
 export function SkillPicture() {
   return (
-    <Picture caption="Illustration. You pick with or without your agent.">
+    <Picture caption="Illustration. Your agent runs it step by step or in one go.">
       <div className="grid grid-cols-[36px_minmax(0,1fr)] items-center gap-3 rounded-xl border border-border-2 bg-card px-3.5 py-3 shadow-card motion-safe:animate-fade-up">
         <span className="grid size-9 place-items-center rounded-md bg-accent-tint text-accent-ink">
           <ShoppingCart className="size-4" />
@@ -69,7 +69,7 @@ export function SkillPicture() {
         </span>
       </div>
       <div className="flex flex-col gap-2.5">
-        <BarRow icon={UserRoundCheck} label="With your agent">
+        <BarRow icon={UserRoundCheck} label="Step by step">
           <span
             className="block h-3 w-full origin-left rounded-full bg-ink-4 motion-safe:animate-uf-grow motion-safe:[animation-duration:3.4s]"
             style={delay(0.6)}
@@ -78,7 +78,7 @@ export function SkillPicture() {
         <BarRow
           label={
             <>
-              Without your agent <UltrafastWordmark />
+              In one go <UltrafastWordmark />
             </>
           }
         >

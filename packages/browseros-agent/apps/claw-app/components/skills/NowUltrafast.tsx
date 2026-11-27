@@ -100,7 +100,7 @@ export function NowUltrafastStrip({ skill }: { skill: Skill }) {
         </h3>
         <p className={cn('m-0 text-[14.5px]', INK.ink2)}>
           {runsByItself(skill)
-            ? 'neo learned it on the first run. Next time neo does it by itself.'
+            ? 'neo learned it on the first run. Next time your agent runs it in one go.'
             : 'neo learned the fast version on the first run.'}
         </p>
       </div>

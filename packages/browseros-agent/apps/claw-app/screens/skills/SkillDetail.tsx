@@ -555,7 +555,7 @@ const ALWAYS_WITH_REASON: Record<string, string> = {
   delete: 'This skill deletes something.',
 }
 
-/** "With your agent" or "without your agent" for a skill that changes something. */
+/** "Step by step" or "In one go" for a skill that changes something. */
 function RunsChoiceBlock({
   skill,
   choice,
@@ -587,7 +587,7 @@ function RunsChoiceBlock({
     return (
       <div className="flex flex-col gap-2.5">
         <Note icon={<Eye aria-hidden className="size-4" />}>
-          This skill only reads pages, so neo runs it without your agent.
+          This skill only reads pages, so your agent always runs it in one go.
           There’s nothing to choose.
         </Note>
       </div>
@@ -603,7 +603,7 @@ function RunsChoiceBlock({
         <Note tone="amber" icon={<RefreshCw aria-hidden className="size-4" />}>
           <strong className="text-cyanotype-ink">The last step changed.</strong>{' '}
           It now does this{site ? ` on ${site}` : ''}: “{click}”. Your earlier
-          choice was for a different step, so it runs with your agent until you
+          choice was for a different step, so it runs step by step until you
           choose again.
         </Note>
       ) : null}
@@ -612,7 +612,7 @@ function RunsChoiceBlock({
       ) : null}
       {choice.state === 'locked' ? (
         <p>
-          ultrafast is off on this computer, so this skill runs with your agent
+          ultrafast is off on this computer, so this skill runs step by step
           now.
         </p>
       ) : null}
@@ -644,7 +644,7 @@ function RunsChoiceBlock({
           selected={choice.selected === 'with_agent'}
           disabled={choice.disabled}
           icon={<UserRoundCheck aria-hidden className="size-4" />}
-          title="With your agent"
+          title="Step by step"
           time={choice.slowLabel}
           why="Your agent reads each page as it goes, so it can stop if something looks wrong. Safer."
         />
@@ -658,9 +658,9 @@ function RunsChoiceBlock({
             ) : null
           }
           ultrafast
-          title="Without your agent"
+          title="In one go"
           time={choice.fastLabel}
-          why="neo does it by itself. It only stops if a step can’t find what it expects."
+          why="Your agent hands it to neo, which runs every step. It only stops if a step can’t find what it expects."
         />
       </RadioGroup>
       {choice.state === 'choose' ? (
@@ -668,8 +668,8 @@ function RunsChoiceBlock({
           tone="amber"
           icon={<MessageCircleQuestion aria-hidden className="size-4" />}
         >
-          You haven’t chosen yet, so it runs with your agent. Your agent will
-          ask you the next time you use it, or you can choose here.
+          You haven’t chosen yet, so it runs step by step. Your agent will ask
+          you the next time you use it, or you can choose here.
         </Note>
       ) : null}
       {choice.state === 'reask' ? (
@@ -695,7 +695,7 @@ function RunsChoiceBlock({
       {choice.state === 'always' ? (
         <Note icon={<ShieldCheck aria-hidden className="size-4" />}>
           Skills that pay, place an order, send a message or delete something
-          always run with your agent, so it can check each page first.
+          always run step by step, so your agent can check each page first.
         </Note>
       ) : null}
       {choice.state === 'locked' ? (

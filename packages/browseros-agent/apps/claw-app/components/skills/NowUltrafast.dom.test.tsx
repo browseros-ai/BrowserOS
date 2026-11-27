@@ -169,7 +169,7 @@ describe('the now ultrafast strip', () => {
     expect(container.querySelector('[role="status"]')).not.toBeNull()
     expect(text()).toContain('Your skill is now ultrafast.')
     expect(text()).toContain(
-      'neo learned it on the first run. Next time neo does it by itself.',
+      'neo learned it on the first run. Next time your agent runs it in one go.',
     )
     expect(text()).toContain('7s a run, down from about 5 min')
 
@@ -177,7 +177,7 @@ describe('the now ultrafast strip', () => {
     expect(text()).not.toContain('Your skill is now ultrafast.')
   })
 
-  it('tests that a skill that still runs with the agent makes no promise to run by itself', async () => {
+  it('tests that a skill that still runs with the agent makes no promise to run in one go', async () => {
     const verified = {
       status: 'verified' as const,
       flowVersion: 1,
@@ -203,7 +203,7 @@ describe('the now ultrafast strip', () => {
     )
     expect(text()).toContain('Your skill is now ultrafast.')
     expect(text()).toContain('neo learned the fast version on the first run.')
-    expect(text()).not.toContain('Next time neo does it by itself.')
+    expect(text()).not.toContain('Next time your agent runs it in one go.')
 
     await remount(
       <NowUltrafastStrip
@@ -217,7 +217,7 @@ describe('the now ultrafast strip', () => {
       />,
     )
     expect(text()).toContain(
-      'neo learned it on the first run. Next time neo does it by itself.',
+      'neo learned it on the first run. Next time your agent runs it in one go.',
     )
   })
 

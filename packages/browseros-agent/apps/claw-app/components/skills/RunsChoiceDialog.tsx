@@ -30,7 +30,7 @@ interface RunsChoiceDialogProps {
   onClose: () => void
 }
 
-/** Confirms switching a write skill to run with or without the agent. */
+/** Confirms switching a write skill between step by step and in one go. */
 export function RunsChoiceDialog({
   name,
   target,
@@ -47,11 +47,11 @@ export function RunsChoiceDialog({
     onClose()
   }
   const without = useRunWithoutAgent({
-    onSuccess: () => settled(`/${name} now runs without your agent.`),
+    onSuccess: () => settled(`/${name} now runs in one go.`),
     onError: (error) => toastApiError('Couldn’t change how it runs', error),
   })
   const withAgent = useRunWithAgent({
-    onSuccess: () => settled(`/${name} now runs with your agent.`),
+    onSuccess: () => settled(`/${name} now runs step by step.`),
     onError: (error) => toastApiError('Couldn’t change how it runs', error),
   })
   const pending = without.isPending || withAgent.isPending
@@ -67,9 +67,7 @@ export function RunsChoiceDialog({
     >
       <CenterMorphModalContent
         ariaLabel={
-          toWithout
-            ? `Run /${name} without your agent?`
-            : `Run /${name} with your agent?`
+          toWithout ? `Run /${name} in one go?` : `Run /${name} step by step?`
         }
         showCloseButton={false}
         className="max-w-[460px] border-border-2 bg-card"
@@ -78,12 +76,12 @@ export function RunsChoiceDialog({
           <div className="flex flex-col gap-2">
             <h2 className="font-bold text-[20px] text-cyanotype-ink tracking-[-0.015em]">
               {toWithout
-                ? `Run /${name} without your agent?`
-                : `Run /${name} with your agent?`}
+                ? `Run /${name} in one go?`
+                : `Run /${name} step by step?`}
             </h2>
             <p className="text-[14.5px] text-ink-2">
               {toWithout
-                ? `neo will do it by itself${fastLabel ? ` in ${fastLabel}` : ''}, including this step${where}: “${click ?? 'its last step'}”. It only stops if a step can’t find what it expects, so it won’t notice things like the wrong item. You can switch back anytime.`
+                ? `Your agent will hand it to neo, which runs every step${fastLabel ? ` in ${fastLabel}` : ''}, including this step${where}: “${click ?? 'its last step'}”. It only stops if a step can’t find what it expects, so it won’t notice things like the wrong item. You can switch back anytime.`
                 : 'Your agent will read each page as it goes. It’s slower, but safer. You can switch back anytime.'}
             </p>
           </div>
@@ -104,7 +102,7 @@ export function RunsChoiceDialog({
               }
               className="font-semibold"
             >
-              {toWithout ? 'Run without my agent' : 'Run with my agent'}
+              {toWithout ? 'Run in one go' : 'Run step by step'}
             </StatefulButton>
           </div>
         </div>
