@@ -1,8 +1,8 @@
 //! `ChunkRun` over a hand-built tree and a fake page that runs upstream's loop: every transfer,
 //! the three joins from the page to the tree, nested mixed selectors, candidate errors and stale
 //! refs reached or not, stale members, strict mode against the probe's recording, the one
-//! pin a frame hop takes, and the options of a collapsed select, which reach the page through
-//! their select.
+//! pin a frame hop takes, the options of a collapsed select, which reach the page through
+//! their select, and `aria-template`, which never does.
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -161,6 +161,10 @@ fn attr(body: &str) -> Value {
 
 fn aria_ref(body: &str) -> Value {
     part("aria-ref", body)
+}
+
+fn template(body: &Value) -> Value {
+    part("aria-template", &body.to_string())
 }
 
 fn nested(name: &str, parts: &[Value]) -> Value {
@@ -586,6 +590,90 @@ async fn path_3_runs_the_page_form_from_plain_element_roots() -> TestResult {
         "the page form hands over the document's buttons"
     );
     Ok(())
+}
+
+/// A template's matches depend on the root it starts from, so the tree answers it from roots it
+/// has nodes for, and every other root refuses it: no candidate set can stand for it, and the
+/// template never reaches the page, whose engine for it is a stand-in that throws.
+#[tokio::test]
+async fn a_template_runs_over_the_tree_and_refuses_from_a_plain_root() -> TestResult {
+    let (tree, mut page) = list_page()?;
+    let edit_or_save = template(&json!({
+        "kind": "role", "role": "button", "name": { "pattern": "^(Edit|Save)$" }
+    }));
+    let found = matched(
+        run(
+            &tree,
+            &mut page,
+            &chunk(&[attr("[data-row=\"a\"]"), edit_or_save.clone()]),
+        )
+        .await?,
+    )?;
+    assert!(
+        matches!(found.set, ChunkSet::Keys(_)),
+        "row a is a tree node, so the tree answered (path 2)"
+    );
+    assert_eq!(doms(&tree, &page, &found.set)?, [13], "row a's Edit button");
+
+    page.sent.clear();
+    let from_panel = run(
+        &tree,
+        &mut page,
+        &chunk(&[attr("[data-panel]"), edit_or_save.clone()]),
+    )
+    .await?;
+    page.root_at(30);
+    let from_handle = run_from(
+        &tree,
+        &mut page,
+        &Refs::default(),
+        QueryRoot::Untracked,
+        &chunk(&[edit_or_save]),
+        Strictness::FirstMatch,
+    )
+    .await?;
+    for (outcome, why) in [
+        (from_panel, "a plain element in the set (path 3)"),
+        (from_handle, "an element handle the tree has no node for"),
+    ] {
+        let ChunkOutcome::Thrown { message, class } = outcome else {
+            return Err(format!("{why}: refused, not {outcome:?}").into());
+        };
+        assert_eq!(
+            class,
+            ErrorClass::Unsupported,
+            "{why}: Neo refuses it; the script is not wrong"
+        );
+        assert!(
+            message.starts_with("aria-template: "),
+            "{why}: the refusal names the engine: {message}"
+        );
+    }
+    for call in stage_calls(&page) {
+        let Sent::Stage { selector, .. } = call else {
+            continue;
+        };
+        assert!(
+            !engines(selector).contains(&"aria-template"),
+            "the page never runs the template: {selector}"
+        );
+    }
+    Ok(())
+}
+
+/// Every part's engine name in a sent selector, nested ones included.
+fn engines(selector: &Value) -> Vec<&str> {
+    let mut names = Vec::new();
+    let mut pending = vec![selector];
+    while let Some(selector) = pending.pop() {
+        for part in selector["parts"].as_array().into_iter().flatten() {
+            names.extend(part["name"].as_str());
+            if let Some(nested) = part["body"].get("parsed") {
+                pending.push(nested);
+            }
+        }
+    }
+    names
 }
 
 #[tokio::test]

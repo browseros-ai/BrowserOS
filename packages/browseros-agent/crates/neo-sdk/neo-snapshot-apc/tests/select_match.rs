@@ -1,6 +1,6 @@
 //! `TreeStage` through the public API over hand-built trees named by the name pass: Playwright
 //! 1.64.1's `selectors-role.spec.ts` restated test by test, nested chains, documents, `aria-ref`,
-//! the `NameCache` seam, and strict mode against recorded messages.
+//! `aria-template`, the `NameCache` seam, and strict mode against recorded messages.
 
 #[path = "support/prelude_chunks.rs"]
 mod prelude_chunks;
@@ -20,6 +20,7 @@ use neo_snapshot_apc::tree::{
     NodeBuilder, NodeId, NodeKey, SnapshotTree,
 };
 use prelude_chunks::Prelude;
+use serde_json::{Value, json};
 
 const MAIN: &str = "doc-main";
 
@@ -1857,5 +1858,207 @@ fn strict_mode_accepts_zero_or_one_match() -> Result<(), Box<dyn Error>> {
         Ok(Some(page.node(10)?)),
         "one match is the element a strict locator acts on"
     );
+    Ok(())
+}
+
+/// A page for `aria-template`, the frame's button named as one in the main document:
+///
+/// ```text
+/// button 10 "Pay", button 11 "Cancel"
+/// ul 12 > li 13 > button 14 "Pay"
+/// ul 15 > li 16 > ul 17 > li 18 "Inner"
+/// "Loose" (text at the top)
+/// iframe 19 > doc-child: button 1 "Pay"
+/// ```
+fn template_page() -> Result<Page, Box<dyn Error>> {
+    let child = FrameBuilder::new("doc-child").root(NodeBuilder::root().child(button(1, "Pay")));
+    Page::new(NodeBuilder::root().children(vec![
+        button(10, "Pay"),
+        button(11, "Cancel"),
+        el("ul", 12).child(el("li", 13).child(button(14, "Pay"))),
+        el("ul", 15).child(
+            el("li", 16).child(el("ul", 17).child(el("li", 18).child(NodeBuilder::text("Inner")))),
+        ),
+        NodeBuilder::text("Loose"),
+        NodeBuilder::iframe(child).tag("iframe").dom_id(19),
+    ]))
+}
+
+/// `template` as the raw selector's body: Playwright's parsed `AriaTemplateNode` JSON.
+fn template(template: &Value) -> String {
+    format!("aria-template={template}")
+}
+
+fn pay() -> Value {
+    json!({ "kind": "role", "role": "button", "name": "Pay" })
+}
+
+fn text_template(text: &str) -> Value {
+    json!({ "kind": "text", "text": { "raw": text, "normalized": text } })
+}
+
+#[test]
+fn aria_template_matches_the_top_most_subtrees_the_template_matches() -> Result<(), Box<dyn Error>>
+{
+    let js = Prelude::load()?;
+    let page = template_page()?;
+    let cases: [(Value, &[i32], &str); 5] = [
+        (
+            pay(),
+            &[10, 14],
+            "both Pay buttons; the frame's is another document's",
+        ),
+        (
+            json!({ "kind": "role", "role": "button", "name": "Refund" }),
+            &[],
+            "no button is named Refund",
+        ),
+        (
+            json!({ "kind": "role", "role": "button", "name": { "pattern": "^Ca" } }),
+            &[11],
+            "a name regex, read as JavaScript reads it",
+        ),
+        (
+            json!({ "kind": "role", "role": "list", "children": [
+                { "kind": "role", "role": "listitem", "children": [pay()] }
+            ] }),
+            &[12],
+            "children match in order, each against a child of the node",
+        ),
+        (
+            json!({ "kind": "role", "role": "list" }),
+            &[12, 15],
+            "list 17 is inside a match, which upstream's walk does not enter",
+        ),
+    ];
+    for (body, doms, why) in cases {
+        page.check(&js, &locator(&template(&body))?, &page.nodes(doms)?, why)?;
+    }
+    Ok(())
+}
+
+#[test]
+fn aria_template_starts_at_its_root_itself() -> Result<(), Box<dyn Error>> {
+    let js = Prelude::load()?;
+    let page = template_page()?;
+    let list = locator(&template(&json!({ "kind": "role", "role": "list" })))?;
+    let inner = page.try_select_in(&js, &list, Scope::Root(page.node(17)?))??;
+    assert_eq!(
+        inner.nodes(),
+        [page.node(17)?],
+        "the root's own node takes part, as upstream's tree starts at its root element"
+    );
+    let stage = TreeStage::new(&js.chunk(&list)?)?;
+    let roots = page.nodes(&[12, 17])?;
+    let after = Scope::After {
+        root: page.root()?,
+        roots: &roots,
+    };
+    assert_eq!(
+        stage
+            .select(&page.tree, after, &page.tree.name_cache(), &page.refs)?
+            .nodes(),
+        roots,
+        "a later stage matches from each root of its set, each its own tree"
+    );
+    let around = page.try_select_in(
+        &js,
+        &locator(&template(&text_template("Inner")))?,
+        Scope::Root(page.node(15)?),
+    )??;
+    assert_eq!(
+        around.nodes(),
+        [page.node(18)?],
+        "a matching text reports the element it is in"
+    );
+    page.check(
+        &js,
+        &locator(&template(&text_template("Loose")))?,
+        &[page.root()?],
+        "a text at the top reports the query root: the Document, where upstream names <html>",
+    )
+}
+
+#[test]
+fn aria_template_runs_inside_chains_and_filters() -> Result<(), Box<dyn Error>> {
+    let js = Prelude::load()?;
+    let page = template_page()?;
+    let pay = serde_json::to_string(&template(&pay()))?;
+    page.check(
+        &js,
+        &format!("page.getByRole('listitem').filter({{ has: page.locator({pay}) }})"),
+        &page.nodes(&[13])?,
+        "only the item around a Pay button",
+    )?;
+    page.check(
+        &js,
+        &format!("page.getByRole('list').locator({pay})"),
+        &page.nodes(&[14])?,
+        "each list matches its own tree, and only list 12 holds a Pay button",
+    )
+}
+
+#[test]
+fn aria_template_stays_in_its_document() -> Result<(), Box<dyn Error>> {
+    let js = Prelude::load()?;
+    let page = template_page()?;
+    let pay = locator(&template(&pay()))?;
+    let token = DocToken::new("doc-child").ok_or("non-empty token")?;
+    let child_doc = page
+        .tree
+        .document_by_token(&token)
+        .ok_or("the child document is stitched")?
+        .id();
+    let scope = Scope::document(&page.tree, child_doc).ok_or("the child has a root")?;
+    assert_eq!(
+        page.try_select_in(&js, &pay, scope)??.nodes(),
+        [page.node_in("doc-child", 1)?],
+        "the frame's own document finds its button"
+    );
+    let from_iframe = page.try_select_in(&js, &pay, Scope::Root(page.node(19)?))??;
+    assert!(
+        from_iframe.is_empty(),
+        "an <iframe>'s tree is the iframe alone, as upstream's template matcher reads one frame"
+    );
+    Ok(())
+}
+
+#[test]
+fn aria_template_errors_only_once_a_root_reaches_it() -> Result<(), Box<dyn Error>> {
+    let js = Prelude::load()?;
+    let page = template_page()?;
+    let bad_regex = json!({ "kind": "role", "role": "button", "name": { "pattern": "(" } });
+    for (body, why) in [
+        (
+            "aria-template=not json".to_owned(),
+            "a body that is not JSON",
+        ),
+        (
+            template(&json!({ "kind": "button" })),
+            "JSON that is no template",
+        ),
+        (template(&bad_regex), "a name regex that does not compile"),
+    ] {
+        let chunk = js.chunk(&locator(&body)?)?;
+        let stage = TreeStage::new(&chunk)?;
+        let names = page.tree.name_cache();
+        let Err(error) = stage.select(&page.tree, page.document()?, &names, &page.refs) else {
+            return Err(format!("{why}: the document root reaches the part").into());
+        };
+        assert!(
+            error.to_string().starts_with("aria-template: "),
+            "{why}: the error names its engine: {error}"
+        );
+        let empty = Scope::After {
+            root: page.root()?,
+            roots: &[],
+        };
+        assert!(
+            stage
+                .select(&page.tree, empty, &names, &page.refs)?
+                .is_empty(),
+            "{why}: no root reaches the part, so nothing is thrown"
+        );
+    }
     Ok(())
 }

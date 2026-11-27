@@ -3,11 +3,11 @@
 //!
 //! The page keeps every part it can answer alone (CSS, text, label, attribute, test id, layout).
 //! A chunk made only of those goes to the page as it always has, with no capture. A `role`,
-//! `internal:role` or `aria-ref` part cannot run there any more: the page's role engine is a stub
-//! that throws, and only Rust's ref table knows the refs a snapshot printed. So such a chunk runs
-//! through [`ChunkRun`] over the attempt's capture, and the op's own request then names what it
-//! found as a pinned set, which the page's `resolveTarget` and `queryAll` answer exactly as they
-//! would have answered the chunk:
+//! `internal:role`, `aria-ref` or `aria-template` part cannot run there any more: the page's role
+//! and template engines are stubs that throw, and only Rust's ref table knows the refs a snapshot
+//! printed. So such a chunk runs through [`ChunkRun`] over the attempt's capture, and the op's own
+//! request then names what it found as a pinned set, which the page's `resolveTarget` and
+//! `queryAll` answer exactly as they would have answered the chunk:
 //!
 //! ```text
 //!  chunk ─ ChunkPlan::of ─ page only ─────────────────────▶ ProbeTarget::Chunk  (no capture)
@@ -139,10 +139,7 @@ pub(crate) async fn aim(
     let plan = match plan_of(chunk) {
         Some(Ok(plan)) => plan,
         Some(Err(answer)) => return Ok(Aim::Answered(answer)),
-        // A chunk the engine's typed view does not read goes to the page as it always went:
-        // the page parses every part itself, and its role stand-in throws on a role part, so a
-        // tree leaf hidden in such a chunk fails loudly instead of matching wrongly.
-        None => return as_sent(),
+        None => return Ok(unread(chunk)),
     };
     if plan.is_page_only() {
         return as_sent();
@@ -233,6 +230,49 @@ fn rest_after_ref(chunk: &Chunk) -> Option<Value> {
     let parts = parsed.get("parts")?.as_array()?;
     let rest: Vec<Value> = parts.iter().skip(1).cloned().collect();
     (!rest.is_empty()).then(|| json!({ "parts": rest }))
+}
+
+/// What a chunk the engine's typed view does not read names: the chunk itself, sent to the page
+/// as it always went. The page parses every part itself, and its role stand-in throws on a role
+/// part, so a role leaf hidden in such a chunk fails loudly instead of matching wrongly. An
+/// `aria-template` part is refused here instead, as `unsupported`: Neo matches templates only
+/// over the tree, so the page's stand-in for upstream's engine is never what answers one.
+fn unread(chunk: &Chunk) -> Aim {
+    if names_engine(chunk, "aria-template") {
+        return Aim::Answered(error_reply(
+            ErrorClass::Unsupported,
+            "aria-template: this selector's parts are not in the shape Playwright's selector \
+             parser writes, so Neo cannot match its template over the accessibility snapshot; \
+             pass the selector as a string"
+                .to_owned(),
+        ));
+    }
+    Aim::Target(ProbeTarget::Chunk(ParsedSelector::of(chunk)))
+}
+
+/// Whether a part at any depth of `chunk`'s JSON names `engine`. It reads the chunk as plain
+/// JSON, the one view a chunk the typed selector refuses still has: any object with that `name`
+/// and a `body` counts, wherever it sits.
+fn names_engine(chunk: &Chunk, engine: &str) -> bool {
+    let Ok(parsed) = serde_json::from_str::<Value>(chunk.parsed.get()) else {
+        return false;
+    };
+    let mut pending = vec![&parsed];
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::Object(object) => {
+                if object.get("name").and_then(Value::as_str) == Some(engine)
+                    && object.contains_key("body")
+                {
+                    return true;
+                }
+                pending.extend(object.values());
+            }
+            Value::Array(items) => pending.extend(items),
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+        }
+    }
+    false
 }
 
 /// The prelude's chunk as the engine's typed selector, planned: `None` when the typed view does
@@ -404,5 +444,65 @@ fn probe_failure(scope: &OpScope<'_>, failure: ProbeFailure) -> AimFailure {
     match failure {
         ProbeFailure::Gone(_) => AimFailure::Gone,
         failure => AimFailure::Failed(resolve::failed(scope, failure)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error;
+
+    use serde_json::{Value, json};
+
+    use super::{Aim, unread};
+    use crate::probe::{ErrorClass, ProbeReply, ProbeTarget};
+    use crate::target::Chunk;
+
+    fn chunk(parsed: &Value) -> Result<Chunk, Box<dyn Error>> {
+        Ok(serde_json::from_value(parsed.clone())?)
+    }
+
+    /// The typed view refuses a `css` part whose body is no AST array, and a nested body that is
+    /// not a selector, as a hand-built target can send them.
+    #[test]
+    fn an_unread_chunk_with_a_template_is_refused_and_any_other_goes_to_the_page()
+    -> Result<(), Box<dyn Error>> {
+        let template = json!({ "name": "aria-template", "body": "{}", "source": "{}" });
+        let bad_css = json!({ "name": "css", "body": "li", "source": "li" });
+        for (parsed, why) in [
+            (
+                json!({ "parts": [bad_css, template] }),
+                "beside a part the typed view refuses",
+            ),
+            (
+                json!({ "parts": [bad_css, {
+                    "name": "internal:has",
+                    "body": { "parsed": { "parts": [template] } },
+                    "source": "nested"
+                }] }),
+                "nested under a combinator",
+            ),
+        ] {
+            let Aim::Answered(ProbeReply::Error { class, message, .. }) = unread(&chunk(&parsed)?)
+            else {
+                return Err(format!("{why}: refused before the page").into());
+            };
+            assert_eq!(
+                class,
+                ErrorClass::Unsupported,
+                "{why}: Neo's limit, not the script's"
+            );
+            assert!(
+                message.starts_with("aria-template: "),
+                "{why}: the refusal names the engine: {message}"
+            );
+        }
+        assert!(
+            matches!(
+                unread(&chunk(&json!({ "parts": [bad_css] }))?),
+                Aim::Target(ProbeTarget::Chunk(_))
+            ),
+            "a chunk with no template goes to the page as it stands"
+        );
+        Ok(())
     }
 }

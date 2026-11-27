@@ -1,8 +1,9 @@
 //! Frames through `Playwright::invoke`, against a real browser: frame locator chains into each
 //! of the 8 frames of the nested 4-level fixture (same-process children, OOPIFs, an OOPIF
 //! inside an OOPIF), `count` at each level of a chain 4 deep, strict mode inside a frame, a
-//! frame that navigated and refs the page never printed. Also checks the hand-built locator
-//! input against the vendored parser's output.
+//! frame that navigated, refs the page never printed, and the raw `aria-template=` selector in
+//! the page, a chain and a cross-site frame. Also checks the hand-built locator input against
+//! the vendored parser's output.
 //!
 //! The live tests need BrowserOS with CDP on `BROWSEROS_CDP_PORT` (default 9005):
 //! `bun run test:browser -- cargo test -p neo-playwright --test frames_live -- --ignored`. They serve the
@@ -28,7 +29,7 @@ mod live_run;
 #[path = "support/locator.rs"]
 mod locator;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::error::Error;
 use std::mem;
 use std::sync::Arc;
@@ -427,6 +428,85 @@ async fn tests_that_refs_the_page_never_printed_fail_at_once() -> TestResult {
         "neither waits out its timeout"
     );
     live.close(&page).await
+}
+
+/// The template page: three `Pay` buttons, one in a list and one in a plain `div`, and a
+/// cross-site frame (an OOPIF on `localhost`) with a `Pay` button and a `Pay later` one.
+const TEMPLATE_PAGE: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Template</title></head>
+<body><main><button>Pay</button><button>Cancel</button>
+<ul id="cart"><li><button>Pay</button></li></ul>
+<div id="panel"><button>Pay</button></div>
+<script>
+const frame = document.createElement('iframe');
+frame.title = 'checkout';
+frame.src = `http://localhost:${location.port}/template/frame.html`;
+document.querySelector('main').append(frame);
+</script></main></body></html>"#;
+
+const TEMPLATE_FRAME: &str = r#"<!doctype html><html><head><meta charset="utf-8"><title>Checkout</title></head>
+<body><button>Pay</button><button>Pay later</button></body></html>"#;
+
+/// The raw `aria-template=` selector, as a script writes it, runs over the APC tree with the
+/// matcher `toMatchAriaSnapshot` uses, and never reaches the page's stand-in for upstream's
+/// engine: in the page, from a list and from a plain `div` (both nodes of the capture), read
+/// through hydration, in a cross-site frame, with children, and missing.
+#[tokio::test]
+#[ignore = "needs BrowserOS with CDP on BROWSEROS_CDP_PORT"]
+async fn tests_that_an_aria_template_matches_in_the_page_a_chain_and_a_frame() -> TestResult {
+    let page = |html: &str| Page::html(html).with_header("cache-control", "no-store");
+    let server = FixtureServer::start(HashMap::from([
+        ("/template/page.html".to_owned(), page(TEMPLATE_PAGE)),
+        ("/template/frame.html".to_owned(), page(TEMPLATE_FRAME)),
+    ]))
+    .await?;
+    let host: Arc<dyn OpHost> = Arc::new(LiveRun::connect().await?);
+    let results = js_runner::run_script(
+        &host,
+        &json!({ "page": null }),
+        &format!(
+            "await page.goto({url})\n\
+             const frame = page.frameLocator('[title=\"checkout\"]')\n\
+             await frame.getByRole('button', {{ name: 'Pay later' }}).waitFor()\n\
+             const t = (template) => 'aria-template=' + JSON.stringify(template)\n\
+             const pay = t({{ kind: 'role', role: 'button', name: 'Pay' }})\n\
+             const results = {{}}\n\
+             const check = async (label, run) => {{\n\
+               try {{ results[label] = await run() }}\n\
+               catch (e) {{ results[label] = {{ code: e.code ?? null, first: e.message.split('\\n')[0] }} }}\n\
+             }}\n\
+             try {{\n\
+               await check('page', () => page.locator(pay).count())\n\
+               await check('miss', () => page.locator(t({{ kind: 'role', role: 'button', name: 'Refund' }})).count())\n\
+               await check('chain', () => page.locator('#cart').locator(pay).count())\n\
+               await check('read', () => page.locator('#cart').locator(pay).textContent())\n\
+               await check('frame', () => frame.locator(pay).count())\n\
+               await check('children', () => page.locator(t({{ kind: 'role', role: 'list', children: [\n\
+                 {{ kind: 'role', role: 'listitem', children: [{{ kind: 'role', role: 'button', name: 'Pay' }}] }}\n\
+               ] }})).count())\n\
+               await check('plain', () => page.locator('#panel').locator(pay).count())\n\
+               return results\n\
+             }} finally {{\n\
+               await page.close()\n\
+             }}",
+            url = json!(server.url("127.0.0.1", "/template/page.html")),
+        ),
+    )
+    .await?;
+    assert_eq!(
+        results,
+        json!({
+            "page": 3,
+            "miss": 0,
+            "chain": 1,
+            "read": "Pay",
+            "frame": 1,
+            "children": 1,
+            "plain": 1,
+        }),
+        "the page's three Pay buttons (the frame's are its own), the list's and the div's one, \
+         and the frame's exact Pay"
+    );
+    Ok(())
 }
 
 /// FR-1: a run that starts on a tab with frames lists every one of them in its first
