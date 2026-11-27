@@ -115,8 +115,8 @@ function ProfilePicture() {
         {/* One flex item, so the pill's gap stays out of the sentence. */}
         <span>
           <Highlight
-            text="Set up this meeting on my personal profile calendar"
-            phrase="personal profile"
+            text="Post this on my personal X account"
+            phrase="personal X account"
           />
         </span>
       </span>

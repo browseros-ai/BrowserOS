@@ -691,7 +691,7 @@ describe('the ultrafast page', () => {
     await click('Show me how, Browser profiles')
     expect(
       [...dialog().querySelectorAll('mark')].map((mark) => mark.textContent),
-    ).toEqual(['personal profile'])
+    ).toEqual(['personal X account'])
     expect(button('Done', dialog())).toBeTruthy()
   })
 
