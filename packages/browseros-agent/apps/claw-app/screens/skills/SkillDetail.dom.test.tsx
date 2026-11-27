@@ -289,9 +289,8 @@ describe('the skill page without ultrafast', () => {
 
     expect(text()).toContain('ultrafast is off on this computer')
     expect(text()).toContain('Reorder my usual toothpaste')
-    expect(text()).toContain(
-      'Illustration. Your agent runs it step by step or in one go.',
-    )
+    expect(text()).toContain('Check the price of my usual toothpaste')
+    expect(text()).toContain('Illustration. Each bar is how long a run takes.')
     expect(link('See ultrafast')?.getAttribute('href')).toBe('/pro')
   })
 

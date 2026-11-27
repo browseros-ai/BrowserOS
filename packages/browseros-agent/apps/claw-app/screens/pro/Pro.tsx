@@ -7,6 +7,7 @@
 import { ChevronDown } from 'lucide-react'
 import { useState } from 'react'
 import { Navigate } from 'react-router'
+import { UltrafastWordmark } from '@/components/audit/UltrafastMarks'
 import { Page } from '@/components/layout/Page'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { Card } from '@/components/motion/card'
@@ -17,6 +18,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/motion/collapsible'
 import { CancelProDialog } from '@/components/pro/CancelProDialog'
+import { Highlight } from '@/components/pro/Highlight'
 import { KeySection } from '@/components/pro/KeySection'
 import {
   StepRacePicture,
@@ -50,6 +52,7 @@ import {
   type ProPrices,
   pickPeriod,
   ULTRAFAST_STEPS,
+  type UltrafastStep,
 } from './pro.helpers'
 import { SavingsHero } from './SavingsHero'
 
@@ -155,7 +158,6 @@ export function Pro() {
           />
           {current.onKey ? <KeySection planKey={planKey} /> : null}
           <FeatureTiles
-            all
             onShowMe={(step) => {
               setTourOpens((count) => count + 1)
               setTourAt(step)
@@ -263,83 +265,110 @@ export function Pro() {
 // ---------------------------------------------------------------------------
 
 /**
- * What ultrafast adds, one box each. Before buying, the hero already shows
- * browsing, so only the other two are here.
+ * What ultrafast adds, one box each, the same before and after signup. Only
+ * Show me differs: it appears once ultrafast is on and opens the tour there.
  */
 function FeatureTiles({
-  all = false,
   onShowMe,
 }: {
-  all?: boolean
   /** Set once ultrafast is on: opens the welcome at that picture. */
   onShowMe?: (step: number) => void
 }) {
-  const shown = ULTRAFAST_STEPS.map((step, index) => ({ step, index })).filter(
-    ({ index }) => all || index > 0,
-  )
+  const [first, ...rest] = ULTRAFAST_STEPS.map((step, index) => (
+    <FeatureTile
+      key={step.name}
+      step={step}
+      index={index}
+      onShowMe={onShowMe}
+    />
+  ))
   return (
     <section
       aria-labelledby="ultrafast-features"
       className="flex flex-col gap-3.5"
     >
-      <h2
-        id="ultrafast-features"
-        className={cn(
-          'font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]',
-          !all && 'sr-only',
-        )}
-      >
-        What’s in ultrafast
-      </h2>
-      <div className="grid gap-4 md:grid-cols-2">
-        {shown.map(({ step, index }) => {
-          const wide = all && index === 0
-          return (
-            <Card
-              key={step.name}
-              className={cn(
-                'gap-0 overflow-hidden border-border-2 bg-card p-0 shadow-card',
-                wide &&
-                  'md:col-span-2 lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]',
-              )}
-            >
-              <div
-                className={cn(
-                  'flex flex-col items-start gap-2 px-6 pt-[22px] pb-5',
-                  wide && 'lg:justify-center',
-                )}
-              >
-                <h3 className="flex items-center gap-2.5 font-bold text-[19px] text-cyanotype-ink leading-[1.2] tracking-[-0.015em]">
-                  <step.icon
-                    aria-hidden
-                    className="size-5 shrink-0 text-primary"
-                  />
-                  {step.title}
-                </h3>
-                {onShowMe ? (
-                  <button
-                    type="button"
-                    aria-label={`Show me ${step.name}`}
-                    onClick={() => onShowMe(index)}
-                    className="rounded-sm font-semibold text-[14px] text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    Show me
-                  </button>
-                ) : null}
-              </div>
-              <div
-                className={cn(
-                  'flex-1 border-border-2 border-t bg-accent-tint px-6 py-5',
-                  wide && 'lg:flex lg:items-center lg:border-t-0 lg:border-l',
-                )}
-              >
-                <UltrafastPicture step={index} />
-              </div>
-            </Card>
-          )
-        })}
+      <div className="flex flex-col gap-0.5">
+        <h2
+          id="ultrafast-features"
+          className="font-bold text-[19px] text-cyanotype-ink tracking-[-0.015em]"
+        >
+          What’s in ultrafast
+        </h2>
+        <p className="text-[14px] text-ink-2">
+          <UltrafastWordmark /> is the new pro plan on BrowserOS, with three
+          benefits.
+        </p>
+      </div>
+      <div className="flex flex-col gap-4">
+        {first}
+        {/* From md up the lower boxes share two rows, header and picture (each
+            box is a subgrid of them), so both headers take the taller one's
+            height and both pictures start on one line however the lines wrap.
+            Show me sits at the foot of the header, so it lines up too. */}
+        <div className="grid gap-4 md:grid-cols-2 md:grid-rows-[auto_1fr] md:gap-y-0">
+          {rest}
+        </div>
       </div>
     </section>
+  )
+}
+
+/** One feature: its headline, its line and Show me, over its picture. The first is wide. */
+function FeatureTile({
+  step,
+  index,
+  onShowMe,
+}: {
+  step: UltrafastStep
+  index: number
+  onShowMe?: (step: number) => void
+}) {
+  const wide = index === 0
+  return (
+    <Card
+      className={cn(
+        'gap-0 overflow-hidden border-border-2 bg-card p-0 shadow-card',
+        wide
+          ? 'lg:grid lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]'
+          : 'md:row-span-2 md:grid md:grid-rows-subgrid',
+      )}
+    >
+      <div
+        className={cn(
+          'flex flex-col items-start gap-2 px-6 pt-[22px] pb-5',
+          wide && 'lg:justify-center',
+        )}
+      >
+        <h3 className="flex items-center gap-2.5 font-bold text-[19px] text-cyanotype-ink leading-[1.2] tracking-[-0.015em]">
+          <step.icon aria-hidden className="size-5 shrink-0 text-primary" />
+          {step.title}
+        </h3>
+        <p className="text-[14px] text-ink-2">
+          <Highlight text={step.line} phrase={step.highlight} />
+        </p>
+        {onShowMe ? (
+          <button
+            type="button"
+            aria-label={`Show me ${step.name}`}
+            onClick={() => onShowMe(index)}
+            className={cn(
+              'rounded-sm font-semibold text-[14px] text-accent-ink underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring',
+              !wide && 'md:mt-auto',
+            )}
+          >
+            Show me
+          </button>
+        ) : null}
+      </div>
+      <div
+        className={cn(
+          'flex-1 border-border-2 border-t bg-accent-tint px-6 py-5',
+          wide && 'lg:flex lg:items-center lg:border-t-0 lg:border-l',
+        )}
+      >
+        <UltrafastPicture step={index} />
+      </div>
+    </Card>
   )
 }
 

@@ -14,6 +14,7 @@ import {
 } from '@/components/motion/center-morph-modal'
 import { cn } from '@/lib/utils'
 import { ULTRAFAST_STEPS } from '@/screens/pro/pro.helpers'
+import { Highlight } from './Highlight'
 import { UltrafastPicture } from './UltrafastPictures'
 
 interface UltrafastTourProps {
@@ -70,15 +71,19 @@ export function UltrafastTour({
               </Button>
             </CenterMorphModalClose>
           </div>
-          <div className="mx-3 grid min-h-0 place-items-center rounded-2xl border border-border-2 bg-accent-tint px-3.5 pt-[18px] pb-3.5 sm:mx-4 sm:min-h-[236px] sm:px-[22px] sm:pt-[26px] sm:pb-[18px]">
+          {/* From sm up the tour is always 540px wide, so two floors keep it one
+              height on every step: the picture box fits the tallest picture
+              (the profiles) and the line keeps room for the longest (three
+              rows). A taller picture or a longer line needs its floor raised. */}
+          <div className="mx-3 grid min-h-0 place-items-center rounded-2xl border border-border-2 bg-accent-tint px-3.5 pt-[18px] pb-3.5 sm:mx-4 sm:min-h-[270px] sm:px-[22px] sm:pt-[26px] sm:pb-[18px]">
             <UltrafastPicture key={step} step={step} />
           </div>
           <div className="flex flex-col gap-1.5 px-4 pt-4 pb-1 sm:px-[22px] sm:pt-5">
             <h2 className="font-bold text-[22px] text-cyanotype-ink leading-[1.15] tracking-[-0.02em] sm:text-[26px]">
               {current.title}
             </h2>
-            <p className="text-[15px] text-ink-2 sm:text-base">
-              {current.line}
+            <p className="text-[15px] text-ink-2 sm:min-h-[3lh] sm:text-base">
+              <Highlight text={current.line} phrase={current.highlight} />
             </p>
           </div>
           <div className="flex items-center justify-between gap-3 px-4 pt-3.5 pb-4 sm:px-[22px] sm:pt-4 sm:pb-5">

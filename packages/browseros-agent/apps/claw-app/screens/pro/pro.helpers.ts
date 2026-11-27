@@ -16,31 +16,34 @@ import { Gauge, type LucideIcon, UserRoundCheck, Zap } from 'lucide-react'
 
 export interface UltrafastStep {
   icon: LucideIcon
-  /** The feature's name, shown above the headline. */
+  /** The feature's name, shown above the picture in the tour and read after "Show me". */
   name: string
   title: string
   line: string
+  /** The words of `line` set in the yellow highlight, on the feature card and in the tour. */
+  highlight?: string
 }
 
 /** What ultrafast adds, one picture each, in the order the welcome shows them. */
 export const ULTRAFAST_STEPS: readonly UltrafastStep[] = [
   {
     icon: Gauge,
-    name: 'ultrafast browsing',
-    title: 'Fewer steps. Smaller AI bills.',
-    line: 'On carts and forms, neo does the clicking.',
+    name: 'Fewer steps',
+    title: 'Save your tokens',
+    line: 'Whenever possible, a small model built into neo takes steps for your agent. Fewer steps, fewer tokens.',
   },
   {
     icon: Zap,
     name: 'ultrafast skills',
     title: 'Skills run in seconds',
-    line: 'neo writes them from tasks you repeat.',
+    line: 'Turn a task in History into a skill in one click. On compatible websites, it becomes an ultrafast skill that uses NO tokens and runs the full task in seconds.',
+    highlight: 'NO tokens',
   },
   {
     icon: UserRoundCheck,
-    name: 'Right profile',
-    title: 'Works in the right profile',
-    line: 'Your agent uses the profile you’re signed in to, like Work or Personal.',
+    name: 'Browser profiles',
+    title: 'Multi-profile mode',
+    line: 'Keep separate profiles for personal and work, each with its own logins. Tell your agent “use my personal profile” and it does.',
   },
 ]
 
