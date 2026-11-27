@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/external_provider_impl.cc b/chrome/browser/extensions/external_provider_impl.cc
-index 1cf32e1b816acb5316337a7303fd905929d3335b..5470c3476997ab81c709c07f95f488b0177e8a33 100644
+index 1cf32e1b816acb5316337a7303fd905929d3335b..68a031926ecf1d78dd1b871715a136c7f6d45d4e 100644
 --- a/chrome/browser/extensions/external_provider_impl.cc
 +++ b/chrome/browser/extensions/external_provider_impl.cc
 @@ -32,6 +32,8 @@
@@ -20,7 +20,7 @@ index 1cf32e1b816acb5316337a7303fd905929d3335b..5470c3476997ab81c709c07f95f488b0
      } else {                       // if (external_update_url)
        CHECK(external_update_url);  // Checking of keys above ensures this.
        if (download_location_ == ManifestLocation::kInvalidLocation) {
-@@ -959,6 +961,44 @@ void ExternalProviderImpl::CreateExternalProviders(
+@@ -959,6 +961,66 @@ void ExternalProviderImpl::CreateExternalProviders(
      provider_list->push_back(std::move(initial_external_extensions_provider));
    }
  #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
@@ -62,6 +62,28 @@ index 1cf32e1b816acb5316337a7303fd905929d3335b..5470c3476997ab81c709c07f95f488b0
 +        ExternalInstallPriority::kForeground);
 +    provider_list->push_back(std::move(browseros_provider));
 +  }
++
++#if BUILDFLAG(IS_WIN)
++  // BrowserOS: Chromium registers a per-profile "<user-data-dir>/External
++  // Extensions" source only on macOS, Chromium Linux and ChromeOS. Mirror it
++  // on Windows so every --user-data-dir grid can install extensions from JSON
++  // manifests dropped into its own directory. kExternalPref /
++  // kExternalPrefDownload is the non-policy source, so users can uninstall
++  // from chrome://extensions and the uninstall sticks: PendingExtensionManager
++  // refuses ids recorded in the "extensions.external_uninstalls" pref. Id
++  // validity, manifest parsing and the blocklist stay in stock Chromium code.
++  if (!profile->GetPrefs()->GetBoolean(pref_names::kBlockExternalExtensions)) {
++    auto user_external_extensions_provider =
++        std::make_unique<ExternalProviderImpl>(
++            service,
++            base::MakeRefCounted<ExternalPrefLoader>(
++                chrome::DIR_USER_EXTERNAL_EXTENSIONS, ExternalPrefLoader::NONE,
++                nullptr),
++            profile, ManifestLocation::kExternalPref,
++            ManifestLocation::kExternalPrefDownload, Extension::NO_FLAGS);
++    provider_list->push_back(std::move(user_external_extensions_provider));
++  }
++#endif  // BUILDFLAG(IS_WIN)
  }
  
  }  // namespace extensions
