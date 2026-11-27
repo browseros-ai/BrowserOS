@@ -1,12 +1,5 @@
 /** newPage owns a separate tab; its complete context is an explicit snapshot returned by this script. */
 const labels = ['Parent action ready', 'Frame A action ready', 'Frame A cursor ready', 'Grandchild action ready', 'Grandchild cursor ready', 'Frame B action ready', 'Frame B cursor ready'];
-/**
- * apc-oopif-actionable (Chromium C8, P21): APC sends no InteractionInfo for a cross-site frame below
- * the fold, so frame B's cursor target prints as its plain text until the contract carries it. Only
- * that exact line skips its ref, with the reason in the result; every other assertion still runs.
- */
-const belowFoldGap = { label: 'Frame B cursor ready', reason: 'cross-site frame below the fold (apc-oopif-actionable, C8 P21)' };
-const skipped = new Set();
 function selectedRefs(snapshot) {
   let previous = -1;
   return Object.fromEntries(labels.map(label => {
@@ -15,10 +8,6 @@ function selectedRefs(snapshot) {
     previous = position;
     const line = snapshot.split('\n').find(line => line.includes(label));
     const ref = line?.match(/\[ref=([^\]\s]+)\]/)?.[1];
-    if (ref === undefined && label === belowFoldGap.label && line?.trim() === '- text: ' + label) {
-      skipped.add(label + ': ' + belowFoldGap.reason);
-      return [label, ref];
-    }
     assert(typeof ref === 'string', 'every original frame label retains a ref: ' + label, snapshot);
     return [label, ref];
   }));
@@ -42,7 +31,7 @@ try {
   const refs = selectedRefs(snapshot);
   const tabId = created.tabId;
   assert(typeof tabId === 'number', 'the newly created page has a dynamic tab id', tabId);
-  return { tabId, snapshot, refs, skipped: [...skipped] };
+  return { tabId, snapshot, refs };
 } finally {
   // The task owns outer cleanup; this script closes the tab it explicitly created even on failure.
   await created.close();

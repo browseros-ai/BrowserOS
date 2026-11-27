@@ -16,9 +16,7 @@ export const snapshotConcurrencyCases = [
     ],
     "timeoutMs": 20000,
     "expectation": {
-      "kind": "xfail",
-      "reason": "zero-sized own box (apc-own-border-box, C8 P22: field 38 own_box_empty)",
-      "signature": "zero-size-target-ref"
+      "kind": "pass"
     }
   },
   {
@@ -50,9 +48,7 @@ export const snapshotConcurrencyCases = [
     ],
     "timeoutMs": 40000,
     "expectation": {
-      "kind": "xfail",
-      "reason": "cross-site frame below the fold (apc-oopif-actionable, C8 P21)",
-      "signature": "below-fold-oopif-ref"
+      "kind": "pass"
     }
   },
   {
@@ -68,9 +64,7 @@ export const snapshotConcurrencyCases = [
     ],
     "timeoutMs": 40000,
     "expectation": {
-      "kind": "xfail",
-      "reason": "cross-site frame below the fold (apc-oopif-actionable, C8 P21)",
-      "signature": "below-fold-oopif-ref"
+      "kind": "pass"
     }
   },
   {
@@ -128,9 +122,7 @@ export const snapshotConcurrencyCases = [
     ],
     "timeoutMs": 40000,
     "expectation": {
-      "kind": "xfail",
-      "reason": "cross-site frame below the fold (apc-oopif-actionable, C8 P21)",
-      "signature": "below-fold-oopif-ref"
+      "kind": "pass"
     }
   }
 ] satisfies readonly CaseSpec[]

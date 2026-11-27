@@ -1,6 +1,6 @@
 # Run the SDK desktop fixtures
 
-This suite executes 256 expanded desktop contracts through the SDK's real MCP `run` tool: the frozen 212-row import plus 44 authored SDK rulings. The current policy expects 248 passes and eight strict expected failures; counts follow `cases/requirements.ts` as assigned fixes promote existing failures. `capture-io-017` is a passing iframe download contract. `read-eval-021` passes by verifying the intended script exception.
+This suite executes 256 expanded desktop contracts through the SDK's real MCP `run` tool: the frozen 212-row import plus 44 authored SDK rulings. The current policy expects 252 passes and four strict expected failures; counts follow `cases/requirements.ts` as assigned fixes promote existing failures. `capture-io-017` is a passing iframe download contract. `read-eval-021` passes by verifying the intended script exception.
 
 From `packages/browseros-agent`, run the full suite on the Linux pool:
 
@@ -26,7 +26,7 @@ The original 212-case Linux amd64 pool run completed all 212 cases with 207 pass
 
 The current strict expected failures remain visible in console output, receipts, and JUnit. Their matchers require the known script owner, code, message, and payload. A successful result is an XPASS and fails the suite. Setup, transport, host assertions, and cleanup failures also fail. Uncertain requests or failed cleanup stop browser state reuse.
 
-The expected-failure list is `strictFailures` in `cases/requirements.ts`. `labels-001` left it once the APC engine gave a hidden control's label its own ref. The snapshot follow-up removes `isolation-001` and `isolation-002` when its finding is fixed. Four imported `snapshot-concurrency` entries wait on Chromium contract fixes: a cursor target in a cross-site frame below the fold has no ref, since APC sends no InteractionInfo there (`apc-oopif-actionable`, C8 P21), and a zero-size target whose text overflows keeps one, since APC reports no empty own box yet (`apc-own-border-box`, C8 P22). Each matcher also requires the rest of its case's failing snapshot, so only the known gap may fail, and a fixed browser turns them into XPASSes that force their removal. The authored rulings `snapshot-concurrency-003` and `-006`, which may not xfail, skip only the below-fold Frame B cursor ref while its line is exactly that gap, record the reason in their result, and keep every other assertion. The 46 remaining click-recovery cases belong in a later pull request after the "clicks that land" change reaches `main`.
+The expected-failure list is `strictFailures` in `cases/requirements.ts`. `labels-001` left it once the APC engine gave a hidden control's label its own ref. The snapshot follow-up removes `isolation-001` and `isolation-002` when its finding is fixed. Four `snapshot-concurrency` entries and the Frame B skip in `snapshot-concurrency-003` and `-006` left once CI moved to an APC contract v8 browser (0.53.0.3). The 46 remaining click-recovery cases belong in a later pull request after the "clicks that land" change reaches `main`.
 
 After dependency setup, validate offline without Cargo or a browser:
 
