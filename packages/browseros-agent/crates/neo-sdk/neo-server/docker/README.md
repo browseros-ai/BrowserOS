@@ -335,7 +335,7 @@ cached layer, and a keyless build never mounts a key at all.
 # in a BrowserOS checkout, packages/browseros-agent
 crates/neo-sdk/neo-server/docker/build.sh --platform linux/amd64
 # in the host's Dockerfile
-FROM neo-sdk:0.53.0.2-<commit>-amd64
+FROM neo-sdk:0.53.0.3-<commit>-amd64
 COPY settings.json /etc/neo/settings.json
 ```
 
@@ -510,7 +510,7 @@ curl -H "Authorization: Bearer $(cat neo-token)" http://127.0.0.1:9300/v1/settin
 values from the release's `release.json`:
 
 ```sh
-v=0.53.0.2
+v=0.53.0.3
 curl -fsSL "https://cdn.browseros.com/releases/browserclaw/$v/linux/release.json" \
   | jq '.artifacts | {amd64: .x64_deb, arm64: .arm64_deb} | map_values({url, sha256})'
 ```
