@@ -27,6 +27,7 @@ pub struct Dispatch {
     pub session_id: String,
     #[serde(rename = "toolName")]
     pub tool_name: String,
+    /// Use tabId for browser tab identity.
     #[serde(rename = "pageId", skip_serializing_if = "Option::is_none")]
     pub page_id: Option<i64>,
     #[serde(rename = "tabId", skip_serializing_if = "Option::is_none")]

@@ -362,7 +362,7 @@ describe('SDK run audit rows', () => {
 
   function sdkChild(
     toolName: string,
-    identity: Pick<ToolDispatchRow, 'parentDispatchId' | 'tabId' | 'pageId'> = {
+    identity: Pick<ToolDispatchRow, 'parentDispatchId' | 'tabId'> = {
       parentDispatchId: 'run-1',
     },
   ): ToolDispatchRow {
@@ -379,7 +379,6 @@ describe('SDK run audit rows', () => {
     const run = sdkRun('run-1', { meta: { isError: true } })
     const child = sdkChild('read', {
       parentDispatchId: run.dispatchKey,
-      pageId: 2,
       tabId: 123,
     })
     const { steps, hiddenCount } = describeSteps([run, child])
@@ -422,7 +421,6 @@ describe('SDK run audit rows', () => {
     const children = [1, 2].map(() =>
       sdkChild('input.fill', {
         parentDispatchId: 'run-1',
-        pageId: 2,
         tabId: 123,
       }),
     )

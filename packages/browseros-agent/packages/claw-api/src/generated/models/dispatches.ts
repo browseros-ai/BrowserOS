@@ -61,9 +61,10 @@ export interface Dispatch {
      */
     toolName: string;
     /**
-     *
+     * Use tabId for browser tab identity.
      * @type {number}
      * @memberof Dispatch
+     * @deprecated
      */
     pageId?: number;
     /**

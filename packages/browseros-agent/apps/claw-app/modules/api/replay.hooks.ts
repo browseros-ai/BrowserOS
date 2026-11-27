@@ -51,7 +51,6 @@ export interface ReplayFrame {
    * result comes back).
    */
   url?: string | null
-  pageId?: number | null
   /** Chrome tab that owned this dispatch, when known. */
   tabId?: number | null
   /** CDP target observed for this dispatch; may change across navigation. */
