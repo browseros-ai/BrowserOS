@@ -134,7 +134,8 @@ fn presentation_conflict_focusability_rules() -> Result<(), Box<dyn Error>> {
             NodeBuilder::element("h1")
                 .dom_id(10)
                 .role("presentation")
-                .focusable(true),
+                .focusable(true)
+                .clickability_reason(ClickabilityReason::TabIndex),
         )
         .child(
             NodeBuilder::element("h1")
@@ -148,7 +149,8 @@ fn presentation_conflict_focusability_rules() -> Result<(), Box<dyn Error>> {
                 .dom_id(13)
                 .role("none")
                 .contract_disabled(true)
-                .focusable(true),
+                .focusable(true)
+                .clickability_reason(ClickabilityReason::TabIndex),
         )
         .child(
             NodeBuilder::element("a")
@@ -181,6 +183,88 @@ fn presentation_conflict_focusability_rules() -> Result<(), Box<dyn Error>> {
         node_by_dom(&tree, "doc-main", 15)?.role(),
         Some(Role::Presentation),
         "a without href is not focusable so presentation must stick"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn blink_focusability_without_tabindex_keeps_presentational_roles() -> Result<(), Box<dyn Error>> {
+    let root = NodeBuilder::root()
+        .child(
+            NodeBuilder::container()
+                .dom_id(10)
+                .role("presentation")
+                .focusable(true),
+        )
+        .child(
+            NodeBuilder::element("iframe")
+                .dom_id(11)
+                .role("presentation")
+                .focusable(true),
+        )
+        .child(
+            NodeBuilder::container()
+                .dom_id(12)
+                .role("none")
+                .focusable(true)
+                .clickability_reason(ClickabilityReason::MouseClick),
+        )
+        .child(
+            NodeBuilder::element("h1")
+                .dom_id(13)
+                .role("presentation")
+                .focusable(true),
+        )
+        .child(
+            NodeBuilder::element("ul")
+                .dom_id(14)
+                .role("presentation")
+                .focusable(true)
+                .child(NodeBuilder::element("li").dom_id(15)),
+        )
+        .child(
+            NodeBuilder::element("img")
+                .dom_id(16)
+                .alt("")
+                .focusable(true),
+        );
+
+    let tree = build_tree(root)?;
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 10)?.role(),
+        Some(Role::Presentation),
+        "Blink-focusable scrollable div[role=presentation] without tabindex keeps presentation"
+    );
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 11)?.role(),
+        Some(Role::Presentation),
+        "Blink-focusable iframe[role=presentation] without tabindex keeps presentation"
+    );
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 12)?.role(),
+        Some(Role::None),
+        "Blink-focusable scrollable div[role=none] with mouse click listener keeps none"
+    );
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 13)?.role(),
+        Some(Role::Presentation),
+        "Blink-focusable h1[role=presentation] without tabindex keeps presentation"
+    );
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 14)?.role(),
+        Some(Role::Presentation),
+        "Blink-focusable ul[role=presentation] without tabindex keeps presentation"
+    );
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 15)?.role(),
+        Some(Role::Presentation),
+        "li under Blink-focusable ul[role=presentation] without tabindex inherits presentation"
+    );
+    assert_eq!(
+        node_by_dom(&tree, "doc-main", 16)?.role(),
+        Some(Role::Presentation),
+        "Blink-focusable decorative img[alt=\"\"] without tabindex stays presentational"
     );
 
     Ok(())
@@ -598,7 +682,8 @@ fn dynamic_roles_for_forms_sections_and_images() -> Result<(), Box<dyn Error>> {
             NodeBuilder::element("img")
                 .dom_id(65)
                 .alt("")
-                .focusable(true),
+                .focusable(true)
+                .clickability_reason(ClickabilityReason::TabIndex),
         )
         .child(
             NodeBuilder::element("img")
@@ -1258,6 +1343,7 @@ fn presentation_inheritance_conflict_quirks_and_negative_contract() -> Result<()
                 .dom_id(50)
                 .role("presentation")
                 .focusable(true)
+                .clickability_reason(ClickabilityReason::TabIndex)
                 .child(NodeBuilder::element("li").dom_id(51)),
         )
         .child(

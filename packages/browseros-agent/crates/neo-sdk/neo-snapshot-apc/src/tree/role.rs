@@ -693,13 +693,23 @@ fn has_global_aria_attribute(
     false
 }
 
-fn interaction_focusable(raw: &ContentAttributes) -> bool {
+/// Matches Playwright's `hasTabIndex` (`roleUtils.ts`) as closely as the APC wire allows.
+///
+/// Playwright resolves presentation conflicts from native focusability, disabled state, and a
+/// numeric author `tabindex` attribute, never Blink's `Element::IsFocusable()`. Blink sets
+/// `interaction_info.is_focusable` on keyboard-focusable scroll containers, `<iframe>`, and
+/// `contenteditable` hosts with no `tabindex`, which would discard `role="presentation"` or
+/// `role="none"`.
+///
+/// `ClickabilityReason::TabIndex` reflects Blink's `HasTabIndexWasSetExplicitly()` (valid integer
+/// `tabindex`). Remaining wire gaps where a dedicated unconditional
+/// `BrowserOSContentAttributes::has_tabindex` fact would be needed: elements whose
+/// `node_interaction_info` Chromium omits (`pointer-events: none`, `inert`, or anchored offscreen)
+/// and non-integer JS-numeric values such as `tabindex=""`.
+fn has_author_tabindex(raw: &ContentAttributes) -> bool {
     let Some(info) = raw.interaction_info.as_ref() else {
         return false;
     };
-    if let Some(focusable) = info.is_focusable {
-        return focusable;
-    }
     let tab_index = i32::from(ClickabilityReason::TabIndex);
     info.clickability_reasons.contains(&tab_index)
 }
@@ -726,7 +736,7 @@ fn is_natively_focusable(raw: &ContentAttributes) -> bool {
 }
 
 fn is_focusable(raw: &ContentAttributes) -> bool {
-    !is_natively_disabled(raw) && (is_natively_focusable(raw) || interaction_focusable(raw))
+    !is_natively_disabled(raw) && (is_natively_focusable(raw) || has_author_tabindex(raw))
 }
 
 fn has_presentation_conflict_resolution(
@@ -1215,7 +1225,7 @@ fn lookup_implicit_role(
             if empty_alt
                 && no_title
                 && !has_global_aria_attribute(nodes, hidden, id, None)
-                && !interaction_focusable(raw)
+                && !has_author_tabindex(raw)
             {
                 Some(Role::Presentation)
             } else {
