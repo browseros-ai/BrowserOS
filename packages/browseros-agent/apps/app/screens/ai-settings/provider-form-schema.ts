@@ -6,6 +6,7 @@ import { z } from 'zod/v3'
 
 const providerTypeEnum = z.enum([
   'moonshot',
+  'nvidia',
   'anthropic',
   'openai',
   'openai-compatible',
