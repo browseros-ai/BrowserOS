@@ -1069,6 +1069,7 @@ impl WalkFlags {
     const PARENT_VISIBLE: u8 = 1 << 0;
     const IN_FOLDED_LABEL: u8 = 1 << 1;
     const SUPPRESS_TEXT: u8 = 1 << 2;
+    const ANCESTOR_ARIA_HIDDEN: u8 = 1 << 3;
 
     const fn visible_root() -> Self {
         Self(Self::PARENT_VISIBLE)
@@ -1086,6 +1087,10 @@ impl WalkFlags {
         (self.0 & Self::SUPPRESS_TEXT) != 0
     }
 
+    const fn ancestor_aria_hidden(self) -> bool {
+        (self.0 & Self::ANCESTOR_ARIA_HIDDEN) != 0
+    }
+
     const fn with_parent_visible(self, enabled: bool) -> Self {
         self.with_bit(Self::PARENT_VISIBLE, enabled)
     }
@@ -1096,6 +1101,10 @@ impl WalkFlags {
 
     const fn with_suppress_text(self, enabled: bool) -> Self {
         self.with_bit(Self::SUPPRESS_TEXT, enabled)
+    }
+
+    const fn with_ancestor_aria_hidden(self, enabled: bool) -> Self {
+        self.with_bit(Self::ANCESTOR_ARIA_HIDDEN, enabled)
     }
 
     const fn with_bit(self, bit: u8, enabled: bool) -> Self {
@@ -1775,7 +1784,7 @@ fn process_walk_frame(
     }
 
     if is_iframe {
-        visit_iframe_node(ctx, node, raw, frame.parent_draft);
+        visit_iframe_node(ctx, node, raw, frame);
     } else {
         visit_element_node(ctx, node, raw, frame, stack);
     }
@@ -1851,11 +1860,22 @@ fn visit_text_node(
     }
 }
 
+/// Whether an emitted ai-mode draft must carry `[aria-hidden]`.
+///
+/// Marks the outermost surviving emitted node in an ARIA-hidden subtree. An `aria-hidden="true"`
+/// wrapper that emits no draft (such as a 0x0 container, a skipped `<html>`, a folded label, or an
+/// ancestor outside a subtree capture) leaves `ancestor_aria_hidden` false, so the first surviving
+/// descendant prints `[aria-hidden]` and `getByRole` asks `includeHidden`. Emitted descendants
+/// beneath that node see `ancestor_aria_hidden == true` and omit duplicate markers.
+fn should_mark_aria_hidden(is_ai: bool, node: &TreeNode, flags: WalkFlags) -> bool {
+    is_ai && node.hidden().is_aria_hidden() && !flags.ancestor_aria_hidden()
+}
+
 fn visit_iframe_node(
     ctx: &mut DocBuildCtx<'_, '_, '_>,
     node: &TreeNode,
     raw: &ContentAttributes,
-    parent_draft: usize,
+    frame: WalkFrame,
 ) {
     let is_ai = ctx.mode.is_ai();
     let render_active = ctx.render_active;
@@ -1870,13 +1890,13 @@ fn visit_iframe_node(
     let mut draft = DraftNode::new("iframe", String::new(), flags);
     draft.r#ref = assigned_ref;
     draft.active = (is_ai && render_active && node.state().active_element()).then_some(true);
-    draft.aria_hidden = (is_ai && node.hidden().has_own_aria_hidden()).then_some(true);
+    draft.aria_hidden = should_mark_aria_hidden(is_ai, node, frame.flags).then_some(true);
     draft.source_node = Some(node.id());
     draft.iframe = resolve_draft_iframe(ctx.tree, node, raw);
 
     let draft_idx = ctx.arena.push(draft);
     ctx.arena
-        .push_child(parent_draft, DraftChild::Node(draft_idx));
+        .push_child(frame.parent_draft, DraftChild::Node(draft_idx));
 }
 
 fn resolve_draft_iframe(
@@ -1974,14 +1994,18 @@ fn visit_element_node(
     if node.state().inert() {
         ctx.has_inert = true;
     }
+    let mark_aria_hidden = should_mark_aria_hidden(is_ai, node, frame.flags);
     let mut draft = build_element_draft(ctx, node, raw, role_str, raw_name, assigned_ref);
+    draft.aria_hidden = mark_aria_hidden.then_some(true);
 
     let child_suppress = populate_field_value_and_mask(node, raw, &mut draft, frame.flags);
     let draft_idx = ctx.arena.push(draft);
     ctx.arena
         .push_child(frame.parent_draft, DraftChild::Node(draft_idx));
 
-    let child_flags = WalkFlags::visible_root().with_suppress_text(child_suppress);
+    let child_flags = WalkFlags::visible_root()
+        .with_suppress_text(child_suppress)
+        .with_ancestor_aria_hidden(frame.flags.ancestor_aria_hidden() || mark_aria_hidden);
     push_logical_children_reversed(ctx.tree, node.id(), draft_idx, child_flags, stack);
 }
 
@@ -2022,7 +2046,6 @@ fn build_element_draft(
     let mut draft = DraftNode::new(role_str, raw_name, flags);
     ctx.state_form.write(state, &mut draft);
     draft.active = (is_ai && render_active && state.active_element()).then_some(true);
-    draft.aria_hidden = (is_ai && node.hidden().has_own_aria_hidden()).then_some(true);
     draft.r#ref = assigned_ref;
     draft.url = url;
     draft.placeholder = placeholder;
@@ -4466,6 +4489,49 @@ mod tests {
         assert_eq!(
             beta_ref_1, beta_ref_2,
             "Subtree capture must not clear last_identity on unseen sibling nodes"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn subtree_capture_inside_aria_hidden_wrapper_marks_surviving_root()
+    -> Result<(), Box<dyn Error>> {
+        let apc = ApcBuilder::new("doc-sub-hidden")
+            .root(
+                NodeBuilder::root().child(
+                    NodeBuilder::container()
+                        .dom_id(10)
+                        .bounding_box(0, 0, 200, 80)
+                        .aria_hidden(true)
+                        .child(
+                            NodeBuilder::form_control(FormControlType::ButtonButton)
+                                .dom_id(20)
+                                .tag("button")
+                                .bounding_box(0, 0, 80, 24)
+                                .aria_hidden(true)
+                                .child(NodeBuilder::text("Hidden Action").aria_hidden(true)),
+                        ),
+                ),
+            )
+            .build();
+        let tree = SnapshotTree::build(apc, BuildOptions::new())?;
+        let token = DocToken::new("doc-sub-hidden").ok_or("valid doc token")?;
+        let btn_id = tree
+            .node_by_key(&NodeKey::new(token, DomNodeId::new(20)))
+            .ok_or("missing button node")?
+            .id();
+
+        let mut refs = TabRefTable::new();
+        let sub = tree.aria(AriaAsk::ai(&mut refs).with_root(AriaRoot::Subtree(btn_id)))?;
+        let buttons = all_by_role(sub.nodes(), "button");
+        let btn = buttons
+            .first()
+            .copied()
+            .ok_or("missing emitted button in subtree")?;
+        assert_eq!(
+            btn.aria_hidden,
+            Some(true),
+            "subtree rooted below an unemitted aria-hidden ancestor must mark its surviving root"
         );
         Ok(())
     }

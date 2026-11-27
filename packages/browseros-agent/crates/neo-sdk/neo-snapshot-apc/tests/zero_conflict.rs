@@ -26,9 +26,10 @@ use std::time::Instant;
 use std::{env, fs, thread};
 
 use neo_snapshot::Tristate;
+use neo_snapshot_apc::AnnotatedPageContent;
 use neo_snapshot_apc::proto::FormControlType;
 use neo_snapshot_apc::select::SelectorBody;
-use neo_snapshot_apc::tree::{ApcBuilder, NodeBuilder};
+use neo_snapshot_apc::tree::{ApcBuilder, FrameBuilder, NodeBuilder};
 use prelude_chunks::Prelude;
 use zero_conflict::{ByRole, ByRoleOptions, Format, LineCheck, PageCheck, Verdict};
 use zero_conflict_gen::{BASE_SEED, Coverage};
@@ -408,6 +409,178 @@ fn a_button_inside_an_aria_hidden_wrapper_is_reached_in_both_formats() -> Result
         playwright.query,
         playwright.verdict
     ));
+    Ok(())
+}
+
+fn build_unprinted_aria_hidden_wrapper_apc() -> AnnotatedPageContent {
+    let hidden_textbox = NodeBuilder::form_control(FormControlType::InputText)
+        .dom_id(5)
+        .tag("input")
+        .bounding_box(0, 40, 120, 24)
+        .aria_hidden(true);
+    let visible_textbox = NodeBuilder::form_control(FormControlType::InputText)
+        .dom_id(6)
+        .tag("input")
+        .bounding_box(0, 80, 120, 24);
+    let nested_button = NodeBuilder::form_control(FormControlType::ButtonButton)
+        .dom_id(9)
+        .tag("button")
+        .bounding_box(0, 120, 120, 24)
+        .aria_hidden(true)
+        .child(NodeBuilder::text("Nested").aria_hidden(true));
+    let nested_group = NodeBuilder::container()
+        .dom_id(8)
+        .role("group")
+        .bounding_box(0, 110, 300, 40)
+        .aria_hidden(true)
+        .child(nested_button);
+    let child_frame = FrameBuilder::new("doc-child-frame").root(
+        NodeBuilder::root()
+            .dom_id(1)
+            .bounding_box(0, 0, 200, 100)
+            .child(
+                NodeBuilder::form_control(FormControlType::ButtonButton)
+                    .dom_id(2)
+                    .tag("button")
+                    .bounding_box(0, 0, 100, 24)
+                    .child(NodeBuilder::text("In Frame")),
+            ),
+    );
+    let hidden_iframe = NodeBuilder::iframe(child_frame)
+        .dom_id(11)
+        .tag("iframe")
+        .bounding_box(0, 160, 200, 100)
+        .aria_hidden(true);
+
+    // Wrapper nodes with no layout box (`box_visible == false`) and `aria-hidden="true"`.
+    let textbox_wrapper = NodeBuilder::container()
+        .dom_id(4)
+        .aria_hidden(true)
+        .child(hidden_textbox);
+    let group_wrapper = NodeBuilder::container()
+        .dom_id(7)
+        .aria_hidden(true)
+        .child(nested_group);
+    let iframe_wrapper = NodeBuilder::container()
+        .dom_id(10)
+        .aria_hidden(true)
+        .child(hidden_iframe);
+
+    let body = NodeBuilder::element("body")
+        .dom_id(3)
+        .bounding_box(0, 0, 800, 600)
+        .child(textbox_wrapper)
+        .child(visible_textbox)
+        .child(group_wrapper)
+        .child(iframe_wrapper);
+    let html = NodeBuilder::element("html")
+        .dom_id(2)
+        .bounding_box(0, 0, 800, 600)
+        .child(body);
+    ApcBuilder::new("doc-unprinted-hidden-wrapper")
+        .contract_version(8)
+        .viewport(0, 0, 800, 600)
+        .root(
+            NodeBuilder::root()
+                .dom_id(1)
+                .bounding_box(0, 0, 800, 600)
+                .child(html),
+        )
+        .build()
+}
+
+/// An unprinted `aria-hidden="true"` wrapper (0x0 / box-invisible) around box-visible descendants:
+/// sites 04 and 10 put an unnamed `<input>` inside such a wrapper alongside visible textboxes.
+/// Because the wrapper prints no line of its own, the first surviving emitted line in each branch
+/// must carry `[aria-hidden]` so `getByRole` asks `includeHidden`, without duplicating the mark on
+/// nested descendants or leaking it across an `<iframe>` boundary.
+#[test]
+fn a_control_inside_an_unprinted_aria_hidden_wrapper_is_reached_in_both_formats()
+-> Result<(), Box<dyn Error>> {
+    let check = zero_conflict::check_apc(
+        "unprinted aria-hidden wrapper",
+        build_unprinted_aria_hidden_wrapper_apc(),
+    )?;
+    let [neo_text, playwright_text] = &check.texts;
+    let misses: Vec<String> = check
+        .misses()
+        .map(|miss| {
+            format!(
+                "{} line {}: {} ({})",
+                miss.format, miss.line.number, miss.line.text, miss.verdict
+            )
+        })
+        .collect();
+    assert!(
+        misses.is_empty(),
+        "every line under an unprinted aria-hidden wrapper must reach its element:\nmisses: \
+         {misses:?}\n--- neo ---\n{neo_text}\n--- playwright ---\n{playwright_text}"
+    );
+
+    for format in Format::ALL {
+        let hidden_tb = check
+            .lines
+            .iter()
+            .find(|line| {
+                line.format == format
+                    && line.line.role == "textbox"
+                    && line.target.as_ref().is_some_and(|key| key.node.raw() == 5)
+            })
+            .ok_or_else(|| format!("{format}: missing hidden textbox line"))?;
+        assert!(
+            hidden_tb.line.marks.aria_hidden,
+            "{format}: hidden textbox under unprinted wrapper must carry [aria-hidden]: {}",
+            hidden_tb.line.text
+        );
+
+        let iframe_line = check
+            .lines
+            .iter()
+            .find(|line| line.format == format && line.line.role == "iframe")
+            .ok_or_else(|| format!("{format}: missing iframe line"))?;
+        assert!(
+            iframe_line.line.marks.aria_hidden,
+            "{format}: iframe under unprinted aria-hidden wrapper must carry [aria-hidden]: {}",
+            iframe_line.line.text
+        );
+
+        let frame_btn = check
+            .lines
+            .iter()
+            .find(|line| {
+                line.format == format
+                    && line.line.role == "button"
+                    && line.line.name.as_deref() == Some("In Frame")
+            })
+            .ok_or_else(|| format!("{format}: missing child-frame button"))?;
+        assert!(
+            !frame_btn.line.marks.aria_hidden && !frame_btn.line.under_aria_hidden,
+            "{format}: aria-hidden must not leak into child iframe document: {}",
+            frame_btn.line.text
+        );
+    }
+
+    let pw_group = check
+        .lines
+        .iter()
+        .find(|line| line.format == Format::Playwright && line.line.role == "group")
+        .ok_or("playwright: missing group line")?;
+    let pw_nested = check
+        .lines
+        .iter()
+        .find(|line| {
+            line.format == Format::Playwright
+                && line.line.role == "button"
+                && line.target.as_ref().is_some_and(|key| key.node.raw() == 9)
+        })
+        .ok_or("playwright: missing nested button line")?;
+    assert!(
+        pw_group.line.marks.aria_hidden
+            && pw_nested.line.under_aria_hidden
+            && !pw_nested.line.marks.aria_hidden,
+        "playwright: group must carry [aria-hidden] and nested button must inherit it without duplicating the mark:\n{playwright_text}"
+    );
+
     Ok(())
 }
 
