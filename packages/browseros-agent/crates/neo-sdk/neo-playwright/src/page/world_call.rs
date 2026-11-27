@@ -52,7 +52,7 @@ pub(crate) async fn listed_frame_world(
             .await?
         {
             Started::Ready { world, .. } => return Ok(Some(*world)),
-            Started::Missing | Started::Detached | Started::Unread => break,
+            Started::Missing | Started::Detached | Started::Unread(_) => break,
             Started::Gone(world) => {
                 if let Some(world) = world {
                     page.frames().invalidate(&world);

@@ -619,11 +619,9 @@ impl<'a> Resolver<'a> {
                 };
                 world(*started)
             }
-            // A frame the tree could not be read down to may answer later: the op's retry loop
-            // waits for it, as for one not there yet.
-            Started::Missing | Started::Unread => Ok(Err(Step::Missing)),
+            Started::Missing => Ok(Err(Step::Missing)),
             Started::Gone(world) => Ok(Err(Step::Gone(world))),
-            Started::Detached => Err(self
+            Started::Detached | Started::Unread(_) => Err(self
                 .scope
                 .fail(ErrorCode::TargetClosed, "Frame was detached")),
         }

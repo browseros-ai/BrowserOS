@@ -250,7 +250,7 @@ pub(super) struct ProbeSent {
 }
 
 /// Where the scripted tab's child frame, [`SCRIPTED_CHILD`], is.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ChildFrame {
     /// The tab has no child frame.
     Absent,
@@ -260,6 +260,8 @@ pub(super) enum ChildFrame {
     /// out-of-process frame, the main frame's tree does not, and attaching to it never answers,
     /// so a read of the page's frames leaves it out (`frame_tree::FrameTree::unread`).
     Hung,
+    /// As [`ChildFrame::Hung`], but attaching to it is refused at once.
+    Refused,
 }
 
 #[derive(Clone)]
@@ -316,10 +318,11 @@ impl TreeScript {
     }
 
     /// `Target.getTargets`: no pre-existing targets at Playwright start, so the scripted tab
-    /// models a newly opened tab starting at FrameSeq(0) (bare `e1`, then `f1e1`). A hung child
-    /// is the one out-of-process frame listed.
+    /// models a newly opened tab starting at FrameSeq(0) (bare `e1`, then `f1e1`). A hung or
+    /// refused child is the one out-of-process frame listed.
     fn targets(&self) -> Value {
-        let hung = (self.child_frame() == ChildFrame::Hung).then(|| {
+        let out_of_process = matches!(self.child_frame(), ChildFrame::Hung | ChildFrame::Refused);
+        let hung = out_of_process.then(|| {
             json!({ "targetId": SCRIPTED_CHILD, "type": "iframe",
                 "url": "https://a.test/child", "parentFrameId": SCRIPTED_MAIN })
         });
@@ -728,6 +731,12 @@ impl TabScript for TreeScript {
 
     fn cdp_error(&self, method: &str, params: &Value) -> Option<&'static str> {
         match method {
+            "Target.attachToTarget"
+                if params["targetId"] == SCRIPTED_CHILD
+                    && self.child_frame() == ChildFrame::Refused =>
+            {
+                Some("No target with given id found")
+            }
             "DOM.resolveNode" => {
                 let error = self.resolve_node_error(params);
                 if error.is_some() {

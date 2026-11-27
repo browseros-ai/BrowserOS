@@ -20,7 +20,7 @@ use serde_json::json;
 
 use crate::op_scope::OpScope;
 use crate::page::OpPage;
-use crate::page::frame_tree::{self, FramePlace};
+use crate::page::frame_tree::{self, FramePlace, UnreadCause};
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want};
 use crate::resolve::resolver::{self, Hopped, Iframe};
 use crate::resolve::{self, FramePath};
@@ -54,8 +54,8 @@ pub(crate) enum Started {
     /// The page's frame tree no longer lists the frame: it was detached.
     Detached,
     /// The page's frame tree could not be read down to the frame: an out-of-process frame on the
-    /// way did not answer in time. The frame may still be there, so this proves nothing gone.
-    Unread,
+    /// way was left out, and why. The frame may still be there, so this proves nothing gone.
+    Unread(UnreadCause),
 }
 
 /// `DOM.getFrameOwner`'s answer.
@@ -94,15 +94,16 @@ impl FrameStart {
         scope: &OpScope<'_>,
         main: IsolatedWorld,
     ) -> Result<Started, PlaywrightError> {
-        // The tree's read gives each out-of-process frame two seconds and leaves out one that
-        // does not answer rather than wait on it, so a frame missing from a partial read may be
-        // inside one left out, still attached. Callers retire what lived in a detached frame (its
-        // document, and every ref a snapshot printed there), which only a whole read may prove;
-        // an unread frame keeps all of it, so the same ref works once its renderer answers.
+        // The tree's read leaves out an out-of-process frame it cannot read (one that does not
+        // answer within two seconds, or refuses) rather than fail, so a frame missing from a
+        // partial read may be inside one left out, still attached. Callers retire what lived in a
+        // detached frame (its document, and every ref a snapshot printed there), which only a
+        // whole read may prove; an unread frame keeps all of it, so the same ref works once its
+        // renderer answers.
         let chain = match self.chain(page, scope).await? {
             FramePlace::Listed(chain) => chain,
             FramePlace::Absent => return Ok(Started::Detached),
-            FramePlace::Unread => return Ok(Started::Unread),
+            FramePlace::Unread(cause) => return Ok(Started::Unread(cause)),
         };
         let mut world = main;
         let mut path = FramePath::default();
