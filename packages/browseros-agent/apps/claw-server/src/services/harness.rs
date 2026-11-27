@@ -168,9 +168,10 @@ pub struct FirstRunConnectOutcome {
     pub seeded_existing: bool,
 }
 
-/// Owns shared agent MCP configs and skill links. Dev instances are read-only guests:
-/// background maintenance does nothing and explicit connection changes are refused,
-/// because the installed app owns the same files even when Claw state is isolated.
+/// Owns shared agent MCP configs and skill links. Dev instances are guests, because the
+/// installed app owns the same files even when Claw state is isolated: background
+/// maintenance does nothing, and only explicit connects and the user skills of agents the
+/// dev instance connected itself are written.
 #[derive(Clone)]
 pub struct HarnessService {
     manager: McpManager,
@@ -304,24 +305,18 @@ impl HarnessService {
     /// Reconcile a user-authored skill into every connected agent, returning
     /// the agents it was linked into. Serialized with all other skill and
     /// MCP-link mutations through the shared lock so the shared skills.json
-    /// manifest stays consistent.
+    /// manifest stays consistent. A dev instance links only into agents it
+    /// connected itself.
     pub async fn install_skill(&self, spec: SkillSpec) -> AppResult<BTreeSet<AgentId>> {
-        // Local skill authoring remains usable in dev; publishing into shared agent
-        // directories belongs to the installed app, so there are no linked consumers.
-        if self.read_only {
-            return Ok(BTreeSet::new());
-        }
         let _guard = self.mutex.lock().await;
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
-        let reconciler = SkillReconciler::new(self.skill_workspace_dir.clone());
+        let reconciler = self.user_skill_reconciler();
         let environment = SkillEnvironment::current(&self.home_dir);
+        let read_only = self.read_only;
         tokio::task::spawn_blocking(move || {
-            let consumers = recognized_browseros_links(&manager, &workspace_dir)
-                .map_err(manager_app_error)?
-                .into_iter()
-                .map(|link| link.agent)
-                .collect::<BTreeSet<_>>();
+            let consumers =
+                skill_consumers(&manager, &workspace_dir, read_only).map_err(manager_app_error)?;
             reconciler
                 .reconcile(&spec, &consumers, &environment)
                 .map_err(manager_app_error)?;
@@ -331,13 +326,11 @@ impl HarnessService {
     }
 
     /// Remove a skill from every agent directory it was linked into. Idempotent.
+    /// A dev instance removes only the directories it planted itself.
     pub async fn uninstall_skill(&self, name: &str) -> AppResult<()> {
-        if self.read_only {
-            return Ok(());
-        }
         let _guard = self.mutex.lock().await;
         let spec = SkillSpec::new(name, String::new()).map_err(manager_app_error)?;
-        let reconciler = SkillReconciler::new(self.skill_workspace_dir.clone());
+        let reconciler = self.user_skill_reconciler();
         let environment = SkillEnvironment::current(&self.home_dir);
         tokio::task::spawn_blocking(move || {
             reconciler
@@ -351,18 +344,23 @@ impl HarnessService {
     /// The agents currently linked to BrowserOS neo over MCP, i.e. the set a
     /// newly authored skill links into by default.
     pub async fn connected_agents(&self) -> AppResult<BTreeSet<AgentId>> {
-        if self.read_only {
-            return Ok(BTreeSet::new());
-        }
         let _guard = self.mutex.lock().await;
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
+        let read_only = self.read_only;
         tokio::task::spawn_blocking(move || {
-            recognized_browseros_links(&manager, &workspace_dir)
-                .map(|links| links.into_iter().map(|link| link.agent).collect())
-                .map_err(manager_app_error)
+            skill_consumers(&manager, &workspace_dir, read_only).map_err(manager_app_error)
         })
         .await?
+    }
+
+    fn user_skill_reconciler(&self) -> SkillReconciler {
+        let reconciler = SkillReconciler::new(self.skill_workspace_dir.clone());
+        if self.read_only {
+            reconciler.with_recorded_ownership_only()
+        } else {
+            reconciler
+        }
     }
 
     pub async fn connect_browseros(
@@ -890,6 +888,61 @@ fn recognized_browseros_links(
         }
     }
     Ok(links)
+}
+
+fn skill_consumers(
+    manager: &McpManager,
+    workspace_dir: &Path,
+    read_only: bool,
+) -> Result<BTreeSet<AgentId>, ManagerError> {
+    if read_only {
+        return self_connected_agents(manager, workspace_dir);
+    }
+    Ok(recognized_browseros_links(manager, workspace_dir)?
+        .into_iter()
+        .map(|link| link.agent)
+        .collect())
+}
+
+/// Agents whose BrowserOS entry still points where this instance linked it. A dev instance
+/// shares agent configs with the installed app, which may have taken the same entry back
+/// since, so its own manifest alone does not prove the agent is still its consumer.
+fn self_connected_agents(
+    manager: &McpManager,
+    workspace_dir: &Path,
+) -> Result<BTreeSet<AgentId>, ManagerError> {
+    let servers = with_legacy_manifest_migration(workspace_dir, || manager.list())?;
+    let mut agents = BTreeSet::new();
+    for server in servers
+        .iter()
+        .filter(|server| BROWSEROS_MCP_SERVER_NAMES.contains(&server.name.as_str()))
+    {
+        let Some(own_url) = browseros_mcp_url(&server.spec) else {
+            continue;
+        };
+        for (agent, link) in &server.links {
+            let input = InspectEntryInput::new(&server.name, *agent).at_path(&link.config_path);
+            // An unreadable config is not proof of a disconnect: dropping the agent here
+            // would let the next save remove the skills this build installed there.
+            if manager
+                .inspect_entry(input)?
+                .is_some_and(|entry| browseros_mcp_url(&entry.spec) == Some(own_url))
+            {
+                agents.insert(*agent);
+            }
+        }
+    }
+    Ok(agents)
+}
+
+fn browseros_mcp_url(spec: &McpServerSpec) -> Option<&str> {
+    match spec {
+        McpServerSpec::Http { url, .. } | McpServerSpec::Sse { url, .. } => Some(url),
+        McpServerSpec::Stdio { command, args, .. } => {
+            (command == "npx" && args.len() == 2 && args[0] == "mcp-remote")
+                .then(|| args[1].as_str())
+        }
+    }
 }
 
 fn deduplicate_browseros_links(links: Vec<ListedLink>) -> BTreeMap<AgentId, ListedLink> {

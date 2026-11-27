@@ -27,6 +27,7 @@ pub struct SkillReconciler {
     workspace_dir: PathBuf,
     provisioned_roots: Vec<PathBuf>,
     owned_name: Option<String>,
+    recorded_only: bool,
 }
 
 impl SkillReconciler {
@@ -36,7 +37,26 @@ impl SkillReconciler {
             workspace_dir: workspace_dir.into(),
             provisioned_roots: Vec::new(),
             owned_name: None,
+            recorded_only: false,
         }
+    }
+
+    /// Trusts only this workspace's own records as proof of ownership, and only while the
+    /// recorded `SKILL.md` is still on disk unchanged. For an instance that shares agent
+    /// skill roots with another install: ownership markers and the owned name cannot say
+    /// which install planted a directory, so this one never replaces or removes another's.
+    #[must_use]
+    pub fn with_recorded_ownership_only(mut self) -> Self {
+        self.recorded_only = true;
+        self
+    }
+
+    fn record_still_holds(&self, target: &Path, record: &SkillManifestEntry) -> bool {
+        !self.recorded_only
+            || read_content_hash(&target.join("SKILL.md"))
+                .ok()
+                .flatten()
+                .is_some_and(|hash| hash == record.content_hash)
     }
 
     /// Configures skill roots to provision before any consuming application is installed.
@@ -165,7 +185,8 @@ impl SkillReconciler {
         mut identity: impl FnMut(&Path) -> Result<PathBuf, Error>,
         mut replace: impl FnMut(&Path, &SkillSpec, &str) -> std::io::Result<()>,
     ) -> Result<SkillReconcileOutcome, Error> {
-        let owns_name = self.owned_name.as_deref() == Some(spec.name.as_str());
+        let owns_name =
+            !self.recorded_only && self.owned_name.as_deref() == Some(spec.name.as_str());
         let original = read_manifest(&self.workspace_dir)?;
         let plan = plan_reconciliation(
             &original,
@@ -181,10 +202,6 @@ impl SkillReconciler {
         let mut preserve_original_records = BTreeSet::new();
 
         for (target, target_consumers) in &plan.desired {
-            let record_controls = records
-                .get(target)
-                .is_some_and(|record| record.skill_name == spec.name)
-                && plan.manifest_controlled_targets.contains(target);
             let metadata = match fs::symlink_metadata(target) {
                 Ok(metadata) => Some(metadata),
                 Err(error) if error.kind() == ErrorKind::NotFound => None,
@@ -197,6 +214,10 @@ impl SkillReconciler {
                     continue;
                 }
             };
+            let record_controls = records.get(target).is_some_and(|record| {
+                record.skill_name == spec.name
+                    && (metadata.is_none() || self.record_still_holds(target, record))
+            }) && plan.manifest_controlled_targets.contains(target);
             let marker = if metadata.as_ref().is_some_and(|value| value.is_dir()) {
                 match read_marker(target) {
                     Ok(marker) => marker,
@@ -213,9 +234,10 @@ impl SkillReconciler {
             } else {
                 None
             };
-            let marker_controls = marker
-                .as_ref()
-                .is_some_and(|marker| marker.controls(&spec.name));
+            let marker_controls = !self.recorded_only
+                && marker
+                    .as_ref()
+                    .is_some_and(|marker| marker.controls(&spec.name));
             if metadata.is_some() && !owns_name && !record_controls && !marker_controls {
                 preserve_original_records.insert(target.clone());
                 outcome.warnings.push(SkillWarning {
@@ -317,6 +339,19 @@ impl SkillReconciler {
             if metadata.is_none() && record_matches_skill {
                 records.remove(&target);
                 continue;
+            }
+            if self.recorded_only {
+                let still_ours = records
+                    .get(&target)
+                    .is_some_and(|record| self.record_still_holds(&target, record));
+                if record_matches_skill && !still_ours {
+                    // Another install has replaced the directory since it was recorded.
+                    records.remove(&target);
+                    continue;
+                }
+                if !record_controls {
+                    continue;
+                }
             }
             let marker_controls = if record_controls || owns_name {
                 false

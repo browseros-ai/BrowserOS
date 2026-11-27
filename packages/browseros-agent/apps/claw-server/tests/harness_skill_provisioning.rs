@@ -111,6 +111,183 @@ fn dev_mode_honors_explicit_connect_and_disconnect() -> anyhow::Result<()> {
 }
 
 #[test]
+fn dev_mode_installs_skills_only_into_agents_it_connected() -> anyhow::Result<()> {
+    isolated(
+        "dev_mode_installs_skills_only_into_agents_it_connected",
+        None,
+        |home| async move {
+            let claude_config = home.join(".claude.json");
+            let installed_app = r#"{"mcpServers":{"browseros-neo":{"type":"http","url":"http://127.0.0.1:9000/mcp"}}}"#;
+            fs::create_dir_all(home.join(".claude"))?;
+            fs::write(&claude_config, installed_app)?;
+            let codex_config = home.join(".codex/config.toml");
+            fs::create_dir_all(home.join(".codex"))?;
+            fs::write(&codex_config, "model = \"custom\"\n")?;
+            let installed_skill = plant_installed_app_skill(&home, "shared-skill")?;
+            let service = dev_service(&home)?;
+            let url = "http://127.0.0.1:9200/mcp";
+            assert!(service.connected_agents().await?.is_empty());
+
+            let connected = service.connect_browseros(Harness::Codex, url).await?;
+            assert!(connected.installed, "{}", connected.message);
+            assert_eq!(
+                service.connected_agents().await?,
+                [AgentId::Codex].into_iter().collect()
+            );
+
+            let linked = service
+                .install_skill(SkillSpec::new("neo-test", "dev only")?)
+                .await?;
+            assert_eq!(linked, [AgentId::Codex].into_iter().collect());
+            let dev_skill = home.join(".agents/skills/neo-test/SKILL.md");
+            assert_eq!(fs::read_to_string(&dev_skill)?, "dev only");
+            // Claude Code is wired to the installed app only, so the dev skill stays out.
+            assert!(!home.join(".claude/skills/neo-test").exists());
+            assert_eq!(fs::read_to_string(&claude_config)?, installed_app);
+
+            // A skill the installed app planted under the same name is never the dev build's.
+            service
+                .install_skill(SkillSpec::new("shared-skill", "dev copy")?)
+                .await?;
+            assert_eq!(fs::read_to_string(&installed_skill)?, "installed app copy");
+            service.uninstall_skill("shared-skill").await?;
+            assert_eq!(fs::read_to_string(&installed_skill)?, "installed app copy");
+
+            service.uninstall_skill("neo-test").await?;
+            assert!(!dev_skill.exists());
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn dev_mode_keeps_its_skills_when_an_agent_config_is_unreadable() -> anyhow::Result<()> {
+    isolated(
+        "dev_mode_keeps_its_skills_when_an_agent_config_is_unreadable",
+        None,
+        |home| async move {
+            let codex_config = home.join(".codex/config.toml");
+            fs::create_dir_all(home.join(".codex"))?;
+            fs::write(&codex_config, "model = \"custom\"\n")?;
+            let service = dev_service(&home)?;
+            service
+                .connect_browseros(Harness::Codex, "http://127.0.0.1:9200/mcp")
+                .await?;
+            service
+                .install_skill(SkillSpec::new("neo-test", "dev only")?)
+                .await?;
+            let dev_skill = home.join(".agents/skills/neo-test/SKILL.md");
+
+            fs::write(&codex_config, "model = [\n")?;
+
+            assert!(service.connected_agents().await.is_err());
+            assert!(
+                service
+                    .install_skill(SkillSpec::new("neo-test", "dev edit")?)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(fs::read_to_string(&dev_skill)?, "dev only");
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn dev_mode_stops_installing_once_the_installed_app_reclaims_the_agent() -> anyhow::Result<()> {
+    isolated(
+        "dev_mode_stops_installing_once_the_installed_app_reclaims_the_agent",
+        None,
+        |home| async move {
+            let codex_config = home.join(".codex/config.toml");
+            fs::create_dir_all(home.join(".codex"))?;
+            fs::write(&codex_config, "model = \"custom\"\n")?;
+            let service = dev_service(&home)?;
+            let dev_url = "http://127.0.0.1:9200/mcp";
+            service.connect_browseros(Harness::Codex, dev_url).await?;
+            service
+                .install_skill(SkillSpec::new("neo-test", "dev only")?)
+                .await?;
+
+            let reclaimed =
+                fs::read_to_string(&codex_config)?.replace(dev_url, "http://127.0.0.1:9000/mcp");
+            fs::write(&codex_config, reclaimed)?;
+
+            assert!(service.connected_agents().await?.is_empty());
+            let linked = service
+                .install_skill(SkillSpec::new("another-skill", "dev only")?)
+                .await?;
+            assert!(linked.is_empty());
+            assert!(!home.join(".agents/skills/another-skill").exists());
+            // Its own earlier skill is still the dev build's to remove.
+            service.uninstall_skill("neo-test").await?;
+            assert!(!home.join(".agents/skills/neo-test").exists());
+            Ok(())
+        },
+    )
+}
+
+#[test]
+fn installed_app_links_skills_into_every_connected_agent() -> anyhow::Result<()> {
+    isolated(
+        "installed_app_links_skills_into_every_connected_agent",
+        None,
+        |home| async move {
+            fs::create_dir_all(home.join(".codex"))?;
+            fs::write(home.join(".codex/config.toml"), "model = \"custom\"\n")?;
+            let installed_skill = plant_installed_app_skill(&home, "shared-skill")?;
+            let state = home.join("state");
+            let service = HarnessService::new_with_managed_skill(
+                state.join("mcp"),
+                state.join("skills"),
+                home.clone(),
+                SkillSpec::new("browseros-neo", "instructions")?,
+                Arc::new(NoopAnalyticsSink),
+            );
+            service
+                .connect_browseros(Harness::Codex, "http://127.0.0.1:9000/mcp")
+                .await?;
+
+            let linked = service
+                .install_skill(SkillSpec::new("shared-skill", "new copy")?)
+                .await?;
+            assert_eq!(linked, [AgentId::Codex].into_iter().collect());
+            // The installed app's ownership marker lets it update its own earlier copy.
+            assert_eq!(fs::read_to_string(&installed_skill)?, "new copy");
+            service.uninstall_skill("shared-skill").await?;
+            assert!(!installed_skill.exists());
+            Ok(())
+        },
+    )
+}
+
+fn dev_service(home: &Path) -> anyhow::Result<HarnessService> {
+    let state = home.join("state");
+    Ok(HarnessService::new_with_managed_skill(
+        state.join("mcp"),
+        state.join("skills"),
+        home.to_path_buf(),
+        SkillSpec::new("browseros-neo", "dev instructions")?,
+        Arc::new(NoopAnalyticsSink),
+    )
+    .with_read_only(true))
+}
+
+/// A skill directory the installed app wrote earlier, marked as BrowserOS managed.
+fn plant_installed_app_skill(home: &Path, name: &str) -> anyhow::Result<PathBuf> {
+    let dir = home.join(".agents/skills").join(name);
+    fs::create_dir_all(&dir)?;
+    fs::write(dir.join("SKILL.md"), "installed app copy")?;
+    fs::write(
+        dir.join(".browserclaw-managed.json"),
+        format!(
+            r#"{{"version":1,"managedBy":"browserclaw","skillName":"{name}","contentHash":"installed"}}"#
+        ),
+    )?;
+    Ok(dir.join("SKILL.md"))
+}
+
+#[test]
 fn provisions_common_skills_without_apps_or_mcp_connections() -> anyhow::Result<()> {
     isolated(
         "provisions_common_skills_without_apps_or_mcp_connections",
