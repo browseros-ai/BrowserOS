@@ -163,6 +163,19 @@ function createMoonshotFactory(
   })
 }
 
+function createLlmtrFactory(
+  config: ResolvedAgentConfig,
+): (modelId: string) => unknown {
+  if (!config.baseUrl) throw new Error('LLMTR provider requires baseUrl')
+  if (!config.apiKey) throw new Error('LLMTR provider requires apiKey')
+  return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
+    name: 'llmtr',
+    baseURL: config.baseUrl,
+    apiKey: config.apiKey,
+  })
+}
+
 function createQwenCodeFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
@@ -214,6 +227,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProFactory,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotFactory,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeFactory,
+  [LLM_PROVIDERS.LLMTR]: createLlmtrFactory,
 }
 
 // Providers whose assistant messages are serialized by @ai-sdk/openai-compatible,
@@ -229,6 +243,7 @@ const OPENAI_COMPATIBLE_SERIALIZER_PROVIDERS: ReadonlySet<string> = new Set([
   LLM_PROVIDERS.MOONSHOT,
   LLM_PROVIDERS.QWEN_CODE,
   LLM_PROVIDERS.GITHUB_COPILOT,
+  LLM_PROVIDERS.LLMTR,
 ])
 
 /**

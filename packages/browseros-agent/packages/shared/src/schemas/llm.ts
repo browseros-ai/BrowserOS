@@ -26,6 +26,7 @@ export const LLM_PROVIDERS = {
   CHATGPT_PRO: 'chatgpt-pro',
   GITHUB_COPILOT: 'github-copilot',
   QWEN_CODE: 'qwen-code',
+  LLMTR: 'llmtr',
 } as const
 
 /**
@@ -45,6 +46,7 @@ export const LLMProviderSchema = z.enum([
   LLM_PROVIDERS.CHATGPT_PRO,
   LLM_PROVIDERS.GITHUB_COPILOT,
   LLM_PROVIDERS.QWEN_CODE,
+  LLM_PROVIDERS.LLMTR,
 ])
 
 export type LLMProvider = z.infer<typeof LLMProviderSchema>

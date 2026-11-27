@@ -125,6 +125,12 @@ export const providerTemplates: ProviderTemplate[] = [
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#openrouter',
   }),
+  enrichTemplate('llmtr', {
+    defaultModelId: 'qwen/qwen-flash',
+    defaultBaseUrl: 'https://llmtr.com/v1',
+    apiKeyUrl: 'https://llmtr.com',
+    setupGuideUrl: 'https://llmtr.com/docs',
+  }),
   enrichTemplate('lmstudio', {
     defaultModelId: 'openai/gpt-oss-20b',
     defaultBaseUrl: 'http://localhost:1234/v1',
@@ -157,6 +163,7 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'openai-compatible', label: 'OpenAI Compatible' },
   { value: 'google', label: 'Gemini' },
   { value: 'openrouter', label: 'OpenRouter' },
+  { value: 'llmtr', label: 'LLMTR' },
   { value: 'azure', label: 'Azure' },
   { value: 'ollama', label: 'Ollama' },
   { value: 'lmstudio', label: 'LM Studio' },
@@ -187,6 +194,7 @@ const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   'openai-compatible': '',
   google: 'https://generativelanguage.googleapis.com/v1beta',
   openrouter: 'https://openrouter.ai/api/v1',
+  llmtr: 'https://llmtr.com/v1',
   azure: '',
   ollama: 'http://localhost:11434/v1',
   lmstudio: 'http://localhost:1234/v1',

@@ -333,6 +333,7 @@ describe('serializesReasoningContent', () => {
     LLM_PROVIDERS.MOONSHOT,
     LLM_PROVIDERS.QWEN_CODE,
     LLM_PROVIDERS.GITHUB_COPILOT,
+    LLM_PROVIDERS.LLMTR,
   ])('is true for %s (openai-compatible serializer)', (provider) => {
     expect(serializesReasoningContent(provider)).toBe(true)
   })
