@@ -290,7 +290,6 @@ describe('the skill page without ultrafast', () => {
     expect(text()).toContain('ultrafast is off on this computer')
     expect(text()).toContain('Reorder my usual toothpaste')
     expect(text()).toContain('Check the price of my usual toothpaste')
-    expect(text()).toContain('Illustration. Each bar is how long a run takes.')
     expect(link('See ultrafast')?.getAttribute('href')).toBe('/pro')
   })
 
@@ -299,7 +298,7 @@ describe('the skill page without ultrafast', () => {
     await openMore()
 
     expect(text()).toContain('Reorder my usual toothpaste')
-    expect(text()).not.toContain('Illustration.')
+    expect(text()).not.toContain('Check the price of my usual toothpaste')
     expect(link('See ultrafast')).toBeUndefined()
   })
 })

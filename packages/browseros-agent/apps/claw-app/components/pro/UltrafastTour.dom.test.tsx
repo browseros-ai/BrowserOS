@@ -203,12 +203,9 @@ describe('UltrafastTour', () => {
     expect(dialog().getAttribute('aria-label')).toBe('Welcome to ultrafast')
     expect(headline()).toBe('Save your tokens')
     expect(line()).toBe(
-      'Whenever possible, a small model built into neo takes steps for your agent. Fewer steps, fewer tokens.',
+      'Whenever possible, a small model built into the browser takes steps for your agent. Fewer steps, fewer tokens.',
     )
     expect(marked()).toEqual([])
-    expect(dialog().textContent).toContain(
-      'Illustration. Each dot is a step your agent spends tokens on.',
-    )
     expect(button('Step 1 of 3').getAttribute('aria-current')).toBe('step')
     expect(() => button('Back')).toThrow()
     expect(button('Skip')).toBeTruthy()
@@ -223,12 +220,9 @@ describe('UltrafastTour', () => {
     expect(line()).toBe(
       'Turn a task in History into a skill in one click. On compatible websites, it becomes an ultrafast skill that uses NO tokens and runs the full task in seconds.',
     )
-    expect(marked()).toEqual(['NO tokens'])
+    expect(marked()).toEqual(['ultrafast skill'])
     expect(dialog().textContent).toContain(
       'Check the price of my usual toothpaste',
-    )
-    expect(dialog().textContent).toContain(
-      'Illustration. Each bar is how long a run takes.',
     )
 
     await click('Step 3 of 3')
@@ -243,9 +237,6 @@ describe('UltrafastTour', () => {
     )
     expect(picked).toHaveLength(1)
     expect(picked[0]?.textContent).toContain('Personal')
-    expect(dialog().textContent).toContain(
-      'Illustration. On Free, your agent can only work in the Default profile.',
-    )
     expect(() => button('Next')).toThrow()
 
     await click('Back')
@@ -283,7 +274,8 @@ describe('UltrafastTour', () => {
     for (const step of ['Step 1 of 3', 'Step 2 of 3', 'Step 3 of 3']) {
       await click(step)
       const picture = dialog().querySelector('figure')
-      expect(picture?.textContent).toContain('Illustration.')
+      expect(picture).toBeTruthy()
+      expect(picture?.textContent).not.toContain('Illustration')
       expect(picture?.textContent).not.toMatch(/\d/)
     }
   })

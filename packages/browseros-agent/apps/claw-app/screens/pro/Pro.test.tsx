@@ -564,7 +564,7 @@ function featureLines(): string[][] {
 const FEATURE_LINES = [
   [
     'Save your tokens',
-    'Whenever possible, a small model built into neo takes steps for your agent. Fewer steps, fewer tokens.',
+    'Whenever possible, a small model built into the browser takes steps for your agent. Fewer steps, fewer tokens.',
   ],
   [
     'Skills run in seconds',
@@ -630,14 +630,14 @@ describe('the ultrafast page', () => {
   it('tests that Free shows the monthly price, the way in with a key, and the questions', async () => {
     await mount()
 
-    expect(text()).toContain('More from your AI agents.')
     expect(text()).toContain(
-      'Illustration. Each dot is a step your agent spends tokens on.',
+      'The new Pro plan for BrowserOS neo to give you superpowers.',
     )
+    expect(text()).not.toContain('Illustration')
     expect(text()).toContain('Save your tokens')
     expect(text()).toContain('Skills run in seconds')
     expect(text()).toContain('Multi-profile mode')
-    expect(text()).not.toContain('Show me')
+    expect(button('Show me Fewer steps')).toBeTruthy()
     expect(text()).toContain('$20a month')
     expect(text()).toContain('Cancel any time.')
     expect(text()).toContain('2 months free')
@@ -657,7 +657,7 @@ describe('the ultrafast page', () => {
       'Your skills keep working, with your agent at normal speed.',
     )
     expect(text()).toContain(
-      'Your plan also helps with long-term development of BrowserOS core features.',
+      'We have been a free tool so far, but this plan helps support future development of BrowserOS neo! 💙',
     )
     expect(text()).not.toContain('Thanks for helping')
     await click('What does my plan pay for?')
@@ -666,7 +666,7 @@ describe('the ultrafast page', () => {
     )
   })
 
-  it('tests that Free shows the heading, the intro and all three features with their lines, and no Show me', async () => {
+  it('tests that Free shows the heading, the intro and all three features with their lines and Show me', async () => {
     await mount()
 
     const heading = features().querySelector('h2')
@@ -678,8 +678,16 @@ describe('the ultrafast page', () => {
     expect(featureLines()).toEqual(FEATURE_LINES)
     expect(
       [...features().querySelectorAll('mark')].map((mark) => mark.textContent),
-    ).toEqual(['NO tokens', 'personal profile'])
-    expect(features().textContent).not.toContain('Show me')
+    ).toEqual(['ultrafast skill', 'personal profile'])
+    for (const name of [
+      'Fewer steps',
+      'ultrafast skills',
+      'Browser profiles',
+    ]) {
+      expect(button(`Show me ${name}`)).toBeTruthy()
+    }
+    await click('Show me ultrafast skills')
+    expect(dialog().getAttribute('aria-label')).toBe('ultrafast skills')
   })
 
   it('tests that Yearly shows the yearly price and what it works out to', async () => {

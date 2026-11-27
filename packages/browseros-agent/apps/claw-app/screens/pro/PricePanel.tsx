@@ -89,6 +89,12 @@ export function PricePanel({
 
   const amount = formatPrice(price)
   const trial = trialDays > 0 && price.interval === 'month'
+  // Right under the price terms: on a trial, before the way in with a key.
+  const backing = (
+    <p className="max-w-[46ch] font-bold text-[14px] text-cyanotype-ink">
+      {BACKING_LINE}
+    </p>
+  )
 
   if (checkout.phase === 'waiting' || checkout.phase === 'confirming') {
     return (
@@ -145,6 +151,7 @@ export function PricePanel({
             , then {amount} a month. Cancel before then and you won’t be
             charged.
           </p>
+          {backing}
           {useKey ? <p className="text-[13.5px]">{useKey}</p> : null}
         </>
       ) : (
@@ -159,7 +166,7 @@ export function PricePanel({
           {useKey}
         </p>
       )}
-      <p className="max-w-[46ch] text-[13.5px] text-ink-3">{BACKING_LINE}</p>
+      {trial ? null : backing}
     </>
   )
 }

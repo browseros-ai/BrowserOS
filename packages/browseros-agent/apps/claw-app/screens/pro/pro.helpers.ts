@@ -30,14 +30,14 @@ export const ULTRAFAST_STEPS: readonly UltrafastStep[] = [
     icon: Gauge,
     name: 'Fewer steps',
     title: 'Save your tokens',
-    line: 'Whenever possible, a small model built into neo takes steps for your agent. Fewer steps, fewer tokens.',
+    line: 'Whenever possible, a small model built into the browser takes steps for your agent. Fewer steps, fewer tokens.',
   },
   {
     icon: Zap,
     name: 'ultrafast skills',
     title: 'Skills run in seconds',
     line: 'Turn a task in History into a skill in one click. On compatible websites, it becomes an ultrafast skill that uses NO tokens and runs the full task in seconds.',
-    highlight: 'NO tokens',
+    highlight: 'ultrafast skill',
   },
   {
     icon: UserRoundCheck,
@@ -49,7 +49,7 @@ export const ULTRAFAST_STEPS: readonly UltrafastStep[] = [
 
 /** What a plan pays for, as approved: one line on the plan picker, before buying. */
 export const BACKING_LINE =
-  'Your plan also helps with long-term development of BrowserOS core features.'
+  'We have been a free tool so far, but this plan helps support future development of BrowserOS neo! 💙'
 
 /** The same, as thanks, once someone pays or cancels. */
 export const BACKING_THANKS =

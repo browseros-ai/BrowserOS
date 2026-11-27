@@ -80,6 +80,11 @@ export function Pro() {
   const [cancelOpen, setCancelOpen] = useState(false)
   const [tourAt, setTourAt] = useState<number | null>(null)
   const [tourOpens, setTourOpens] = useState(0)
+  // Show me opens the tour at that feature, on Free and once ultrafast is on.
+  const showMe = (step: number) => {
+    setTourOpens((count) => count + 1)
+    setTourAt(step)
+  }
 
   if (plan.isPending) {
     return (
@@ -142,13 +147,7 @@ export function Pro() {
       {pro ? (
         <>
           <PageHeader title={TITLE} />
-          <SavingsHero
-            savings={savings}
-            onShowMe={() => {
-              setTourOpens((count) => count + 1)
-              setTourAt(0)
-            }}
-          />
+          <SavingsHero savings={savings} onShowMe={() => showMe(0)} />
           <PlanPanel
             plan={current}
             portal={portal}
@@ -157,12 +156,7 @@ export function Pro() {
             trialLength={monthlyTrialDays(pricing.data) || DEFAULT_TRIAL_DAYS}
           />
           {current.onKey ? <KeySection planKey={planKey} /> : null}
-          <FeatureTiles
-            onShowMe={(step) => {
-              setTourOpens((count) => count + 1)
-              setTourAt(step)
-            }}
-          />
+          <FeatureTiles onShowMe={showMe} />
         </>
       ) : (
         <>
@@ -172,8 +166,8 @@ export function Pro() {
           >
             <div className="flex min-w-0 flex-col items-start gap-3.5">
               <PageHeader title={TITLE} />
-              <p className="max-w-[16ch] font-extrabold text-[28px] text-cyanotype-ink leading-[1.12] tracking-[-0.03em] md:text-[34px]">
-                More from your AI agents.
+              <p className="max-w-[20ch] font-extrabold text-[28px] text-cyanotype-ink leading-[1.12] tracking-[-0.03em] md:text-[34px]">
+                The new Pro plan for BrowserOS neo to give you superpowers.
               </p>
               <div
                 aria-live="polite"
@@ -201,7 +195,7 @@ export function Pro() {
               <StepRacePicture large />
             </div>
           </section>
-          <FeatureTiles />
+          <FeatureTiles onShowMe={showMe} />
           {idle && prices ? (
             <section
               aria-label="Get ultrafast again"
@@ -265,13 +259,13 @@ export function Pro() {
 // ---------------------------------------------------------------------------
 
 /**
- * What ultrafast adds, one box each, the same before and after signup. Only
- * Show me differs: it appears once ultrafast is on and opens the tour there.
+ * What ultrafast adds, one box each, the same before and after signup. Show me
+ * opens the tour at that feature.
  */
 function FeatureTiles({
   onShowMe,
 }: {
-  /** Set once ultrafast is on: opens the welcome at that picture. */
+  /** Opens the tour at that picture. */
   onShowMe?: (step: number) => void
 }) {
   const [first, ...rest] = ULTRAFAST_STEPS.map((step, index) => (

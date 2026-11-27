@@ -35,7 +35,7 @@ export function UltrafastPicture({ step }: { step: number }) {
 /** Your agent alone takes many paid steps; with ultrafast, neo takes a few. */
 export function StepRacePicture({ large = false }: { large?: boolean }) {
   return (
-    <Picture caption="Illustration. Each dot is a step your agent spends tokens on.">
+    <Picture>
       <Lane icon={Bot} label="Your agent alone" dots={10} large={large} />
       <Lane
         label={
@@ -54,7 +54,7 @@ export function StepRacePicture({ large = false }: { large?: boolean }) {
 /** A skill neo wrote, then how long your agent takes to run it step by step or in one go. */
 export function SkillPicture() {
   return (
-    <Picture caption="Illustration. Each bar is how long a run takes.">
+    <Picture>
       <div className="grid grid-cols-[36px_minmax(0,1fr)] items-center gap-3 rounded-xl border border-border-2 bg-card px-3.5 py-3 shadow-card motion-safe:animate-fade-up">
         <span className="grid size-9 place-items-center rounded-md bg-accent-tint text-accent-ink">
           <ShoppingCart className="size-4" />
@@ -109,7 +109,7 @@ const PROFILES: {
 /** A task, then the browser profiles, with your agent picking the one it belongs in. */
 function ProfilePicture() {
   return (
-    <Picture caption="Illustration. On Free, your agent can only work in the Default profile.">
+    <Picture>
       <span className="inline-flex items-center gap-2 self-start rounded-full border border-border-2 bg-card px-3 py-1.5 font-semibold text-[13.5px] text-cyanotype-ink shadow-card motion-safe:animate-fade-up">
         <Bot className="size-3.5 text-accent-ink" />
         {/* One flex item, so the pill's gap stays out of the sentence. */}
@@ -165,19 +165,12 @@ function ProfilePicture() {
 
 // ---------------------------------------------------------------------------
 
-function Picture({
-  caption,
-  children,
-}: {
-  caption: string
-  children: ReactNode
-}) {
+function Picture({ children }: { children: ReactNode }) {
   return (
     <figure className="m-0 flex w-full flex-col gap-3.5">
       <div aria-hidden className="flex flex-col gap-3.5">
         {children}
       </div>
-      <figcaption className="text-[12.5px] text-ink-3">{caption}</figcaption>
     </figure>
   )
 }
