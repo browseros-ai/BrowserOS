@@ -145,6 +145,9 @@ pub(super) enum EnsuredWorld {
     Gone,
     /// The frame is not in the page any more.
     Missing,
+    /// The page's frame tree could not be read down to the frame ([`Started::Unread`]): it may
+    /// still be there, so nothing about it is proven gone.
+    Unread,
 }
 
 /// Hydrates APC [`NodeKey`]s and [`AriaRefJump`] refs into live isolated worlds under section 6.2
@@ -206,6 +209,7 @@ impl<'a> Hydrate<'a> {
             EnsuredWorld::Ready(world) => world,
             EnsuredWorld::Gone => return Ok(HydrateOutcome::WorldStale),
             EnsuredWorld::Missing => return Ok(HydrateOutcome::StaleDocument),
+            EnsuredWorld::Unread => return Err(unread_frame(self.scope, &key.doc.to_string())),
         };
         let recapture = self
             .tab_tree
@@ -341,6 +345,14 @@ impl<'a> Hydrate<'a> {
                 Ok(EnsuredWorld::Missing) => {
                     let _ = self.tab_tree.retire_doc(self.page.frames(), &key.doc);
                     return Err(detached_ref(self.scope, jump));
+                }
+                // The frame did not answer the tree's read within its budget: nothing proved the
+                // document gone, so it keeps its reservation and the ref its entry, and the same
+                // ref hydrates once the frame answers. The op fails as a timeout (the private
+                // look's `run_timeout`). Retiring here would let one busy moment kill the ref, and
+                // every other ref printed in that document, for good.
+                Ok(EnsuredWorld::Unread) => {
+                    return Err(unread_frame(self.scope, &jump.to_string()));
                 }
                 // A frame tree that cannot be read (refused, or a frame's tree that never
                 // answered) cannot lead to the ref's frame: the ref is detached as far as this op
@@ -626,6 +638,7 @@ pub(super) async fn ensure_world(
             EnsuredWorld::Gone
         }
         Started::Missing | Started::Detached => EnsuredWorld::Missing,
+        Started::Unread => EnsuredWorld::Unread,
     })
 }
 
@@ -639,7 +652,7 @@ pub(crate) async fn ensure_frame_world(
 ) -> Option<IsolatedWorld> {
     match ensure_world(page, scope, page.tree(), frame).await {
         Ok(EnsuredWorld::Ready(world)) => Some(world),
-        Ok(EnsuredWorld::Gone | EnsuredWorld::Missing) | Err(_) => None,
+        Ok(EnsuredWorld::Gone | EnsuredWorld::Missing | EnsuredWorld::Unread) | Err(_) => None,
     }
 }
 
@@ -703,6 +716,15 @@ fn detached_ref(scope: &OpScope<'_>, jump: AriaRefJump) -> PlaywrightError {
     scope.fail(
         ErrorCode::ElementDetached,
         &ref_message(scope, &text, "is not on the page any more"),
+    )
+}
+
+/// `website / wait_timeout`: the frame `subject` lives in did not answer the frame tree's read
+/// in time. A timeout, not a detach: the frame may answer a moment later.
+fn unread_frame(scope: &OpScope<'_>, subject: &str) -> PlaywrightError {
+    scope.fail(
+        ErrorCode::WaitTimeout,
+        &format!("{subject} is in a frame that did not answer in time; try again"),
     )
 }
 

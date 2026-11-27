@@ -298,7 +298,9 @@ impl TabTree {
             let world = match hydrate::ensure_world(page, scope, self, &frame).await? {
                 hydrate::EnsuredWorld::Ready(world) => world,
                 hydrate::EnsuredWorld::Gone => continue,
-                hydrate::EnsuredWorld::Missing => return Ok(Seed::Unread),
+                hydrate::EnsuredWorld::Missing | hydrate::EnsuredWorld::Unread => {
+                    return Ok(Seed::Unread);
+                }
             };
             if world.installed_at() >= captured.requested_at() {
                 return Ok(Seed::Unread);

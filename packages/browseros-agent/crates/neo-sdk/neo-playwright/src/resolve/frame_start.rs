@@ -19,7 +19,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::op_scope::OpScope;
-use crate::page::{OpPage, frame_tree};
+use crate::page::OpPage;
+use crate::page::frame_tree::{self, FramePlace};
 use crate::probe::{self, ProbeFailure, ProbeReply, ProbeRequest, ProbeTarget, Want};
 use crate::resolve::resolver::{self, Hopped, Iframe};
 use crate::resolve::{self, FramePath};
@@ -52,6 +53,9 @@ pub(crate) enum Started {
     Gone(Option<IsolatedWorld>),
     /// The page's frame tree no longer lists the frame: it was detached.
     Detached,
+    /// The page's frame tree could not be read down to the frame: an out-of-process frame on the
+    /// way did not answer in time. The frame may still be there, so this proves nothing gone.
+    Unread,
 }
 
 /// `DOM.getFrameOwner`'s answer.
@@ -83,15 +87,22 @@ impl FrameStart {
 
     /// Walks from `main`, the main frame's world, down to the start frame. A frame no longer
     /// in the page's tree is [`Started::Detached`], which each caller fails as upstream's op on a
-    /// detached frame does.
+    /// detached frame does; one the tree could not be read down to is [`Started::Unread`].
     pub(crate) async fn enter(
         &self,
         page: &OpPage<'_>,
         scope: &OpScope<'_>,
         main: IsolatedWorld,
     ) -> Result<Started, PlaywrightError> {
-        let Some(chain) = self.chain(page, scope).await? else {
-            return Ok(Started::Detached);
+        // The tree's read gives each out-of-process frame two seconds and leaves out one that
+        // does not answer rather than wait on it, so a frame missing from a partial read may be
+        // inside one left out, still attached. Callers retire what lived in a detached frame (its
+        // document, and every ref a snapshot printed there), which only a whole read may prove;
+        // an unread frame keeps all of it, so the same ref works once its renderer answers.
+        let chain = match self.chain(page, scope).await? {
+            FramePlace::Listed(chain) => chain,
+            FramePlace::Absent => return Ok(Started::Detached),
+            FramePlace::Unread => return Ok(Started::Unread),
         };
         let mut world = main;
         let mut path = FramePath::default();
@@ -122,25 +133,25 @@ impl FrameStart {
         })
     }
 
-    /// The frames down to the start frame, from the cache or the page's frame tree; `None`
-    /// when the tree no longer lists it.
+    /// Where the page's frame tree places the start frame, from the cache or a read of the tree.
+    /// Only a listed chain is cached, so a frame left unread is read again by the next attempt.
     async fn chain(
         &self,
         page: &OpPage<'_>,
         scope: &OpScope<'_>,
-    ) -> Result<Option<Vec<FrameId>>, PlaywrightError> {
+    ) -> Result<FramePlace, PlaywrightError> {
         if let Some(chain) = self.lock().as_ref() {
-            return Ok(Some(chain.clone()));
+            return Ok(FramePlace::Listed(chain.clone()));
         }
         let main = page.main_endpoint();
         let tree = frame_tree::read(page.browser(), page.core_page(), &main.session)
             .await
             .map_err(|error| scope.core_error(&error))?;
-        let Some(chain) = tree.path_to(&self.frame) else {
-            return Ok(None);
-        };
-        *self.lock() = Some(chain.clone());
-        Ok(Some(chain))
+        let place = tree.place(&self.frame);
+        if let FramePlace::Listed(chain) = &place {
+            *self.lock() = Some(chain.clone());
+        }
+        Ok(place)
     }
 
     fn lock(&self) -> MutexGuard<'_, Option<Vec<FrameId>>> {

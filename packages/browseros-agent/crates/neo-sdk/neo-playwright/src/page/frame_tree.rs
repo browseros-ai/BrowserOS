@@ -82,6 +82,18 @@ pub(crate) struct FrameTree {
     unread: Vec<(String, String)>,
 }
 
+/// Where one read of a page's frames places a frame ([`FrameTree::place`]).
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum FramePlace {
+    /// The read lists it: the frames from the main frame down to it, the main frame left out.
+    Listed(Vec<FrameId>),
+    /// A whole read does not list it: it was detached.
+    Absent,
+    /// A read that is not whole does not list it: it may be inside an out-of-process frame the
+    /// read could not read, so the read says nothing about it.
+    Unread,
+}
+
 /// Stable identity for one document when validating subtree lifecycle readiness.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct FrameDocument {
@@ -274,6 +286,18 @@ impl FrameTree {
             at = self.frames.iter().find(|info| info.id == *parent)?;
         }
         None
+    }
+
+    /// Where this read places `frame`. Only a whole read proves a frame gone: a read under
+    /// [`Subtrees::Skip`] leaves out an out-of-process frame that does not answer in time (a
+    /// renderer busy in a script, say), and with it every frame inside it, which are as attached
+    /// as before. The frames it did read keep their paths.
+    pub(crate) fn place(&self, frame: &FrameId) -> FramePlace {
+        match self.path_to(frame) {
+            Some(path) => FramePlace::Listed(path),
+            None if self.is_whole() => FramePlace::Absent,
+            None => FramePlace::Unread,
+        }
     }
 }
 
@@ -695,7 +719,7 @@ mod tests {
     use serde::Serialize;
     use serde_json::json;
 
-    use super::{FrameTree, PageFrames, answer, sample_tree};
+    use super::{FramePlace, FrameTree, PageFrames, answer, sample_tree};
     use crate::events::EventHub;
     use crate::events::tab_frames::{ListedFrame, TabFrameList};
     use crate::op_scope::OpScope;
@@ -831,6 +855,30 @@ mod tests {
             stray.frames.is_none(),
             "no stray frame goes as the main frame"
         );
+        Ok(())
+    }
+
+    /// Only a whole read proves a frame gone. A frame a whole read does not list is absent; one
+    /// missing from a read that left an out-of-process frame out is unread, since it may be inside
+    /// that frame, and the frames the partial read did list keep their paths. Fails with a partial
+    /// read's missing frame taken as absent, which retires a busy frame's refs for good.
+    #[test]
+    fn tests_that_only_a_whole_read_places_a_frame_absent() -> Result<(), serde_json::Error> {
+        let mut tree = sample_tree()?;
+        let child = FrameId("child".to_owned());
+        let busy = FrameId("busy".to_owned());
+        assert_eq!(tree.place(&child), FramePlace::Listed(vec![child.clone()]));
+        assert_eq!(tree.place(&busy), FramePlace::Absent, "a whole read");
+        tree.unread.push((
+            "busy".to_owned(),
+            "its tree did not answer within 2000 ms".to_owned(),
+        ));
+        assert_eq!(
+            tree.place(&child),
+            FramePlace::Listed(vec![child.clone()]),
+            "a partial read still leads to the frames it read"
+        );
+        assert_eq!(tree.place(&busy), FramePlace::Unread, "a partial read");
         Ok(())
     }
 
