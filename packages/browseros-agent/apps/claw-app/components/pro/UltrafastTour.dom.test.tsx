@@ -192,18 +192,22 @@ async function press(key: string) {
 }
 
 const headline = () => dialog().querySelector('h2')?.textContent
+const line = () => dialog().querySelector('h2')?.nextElementSibling?.textContent
+const marked = () =>
+  [...dialog().querySelectorAll('mark')].map((mark) => mark.textContent)
 
 describe('UltrafastTour', () => {
   it('tests that the welcome opens on the first picture and says welcome', async () => {
     await show({ welcome: true })
 
     expect(dialog().getAttribute('aria-label')).toBe('Welcome to ultrafast')
-    expect(headline()).toBe('Fewer steps. Smaller AI bills.')
-    expect(dialog().textContent).toContain(
-      'On carts and forms, neo does the clicking.',
+    expect(headline()).toBe('Save your tokens')
+    expect(line()).toBe(
+      'Whenever possible, a small model built into neo takes steps for your agent. Fewer steps, fewer tokens.',
     )
+    expect(marked()).toEqual([])
     expect(dialog().textContent).toContain(
-      'Illustration. Each dot is a step your agent pays for.',
+      'Illustration. Each dot is a step your agent spends tokens on.',
     )
     expect(button('Step 1 of 3').getAttribute('aria-current')).toBe('step')
     expect(() => button('Back')).toThrow()
@@ -216,13 +220,32 @@ describe('UltrafastTour', () => {
     await click('Next')
     expect(headline()).toBe('Skills run in seconds')
     expect(dialog().getAttribute('aria-label')).toBe('ultrafast skills')
+    expect(line()).toBe(
+      'Turn a task in History into a skill in one click. On compatible websites, it becomes an ultrafast skill that uses NO tokens and runs the full task in seconds.',
+    )
+    expect(marked()).toEqual(['NO tokens'])
     expect(dialog().textContent).toContain(
-      'Illustration. Your agent runs it step by step or in one go.',
+      'Check the price of my usual toothpaste',
+    )
+    expect(dialog().textContent).toContain(
+      'Illustration. Each bar is how long a run takes.',
     )
 
     await click('Step 3 of 3')
-    expect(headline()).toBe('Works in the right profile')
-    expect(dialog().textContent).toContain('Using this')
+    expect(headline()).toBe('Multi-profile mode')
+    expect(dialog().getAttribute('aria-label')).toBe('Browser profiles')
+    expect(line()).toBe(
+      'Keep separate profiles for personal and work, each with its own logins. Tell your agent “use my personal profile” and it does.',
+    )
+    expect(marked()).toEqual(['personal profile'])
+    const picked = [...dialog().querySelectorAll('li')].filter((row) =>
+      row.textContent?.includes('Using this'),
+    )
+    expect(picked).toHaveLength(1)
+    expect(picked[0]?.textContent).toContain('Personal')
+    expect(dialog().textContent).toContain(
+      'Illustration. On Free, your agent can only work in the Default profile.',
+    )
     expect(() => button('Next')).toThrow()
 
     await click('Back')
@@ -233,11 +256,11 @@ describe('UltrafastTour', () => {
     await show({})
 
     await press('ArrowLeft')
-    expect(headline()).toBe('Fewer steps. Smaller AI bills.')
+    expect(headline()).toBe('Save your tokens')
     await press('ArrowRight')
     await press('ArrowRight')
     await press('ArrowRight')
-    expect(headline()).toBe('Works in the right profile')
+    expect(headline()).toBe('Multi-profile mode')
   })
 
   it('tests that Skip closes from any picture', async () => {

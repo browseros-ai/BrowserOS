@@ -545,6 +545,37 @@ function dialog(): Element {
   return found
 }
 
+function features(): Element {
+  const found = container.querySelector(
+    '[aria-labelledby="ultrafast-features"]',
+  )
+  if (!found) throw new Error('no feature section')
+  return found
+}
+
+/** Each feature box's headline and the line under it. */
+function featureLines(): string[][] {
+  return [...features().querySelectorAll('h3')].map((title) => [
+    (title.textContent ?? '').trim(),
+    (title.nextElementSibling?.textContent ?? '').trim(),
+  ])
+}
+
+const FEATURE_LINES = [
+  [
+    'Save your tokens',
+    'Whenever possible, a small model built into neo takes steps for your agent. Fewer steps, fewer tokens.',
+  ],
+  [
+    'Skills run in seconds',
+    'Turn a task in History into a skill in one click. On compatible websites, it becomes an ultrafast skill that uses NO tokens and runs the full task in seconds.',
+  ],
+  [
+    'Multi-profile mode',
+    'Keep separate profiles for personal and work, each with its own logins. Tell your agent “use my personal profile” and it does.',
+  ],
+]
+
 async function click(label: string, within?: Element) {
   const target = button(label, within)
   await act(async () => {
@@ -601,11 +632,11 @@ describe('the ultrafast page', () => {
 
     expect(text()).toContain('More from your AI agents.')
     expect(text()).toContain(
-      'Illustration. Each dot is a step your agent pays for.',
+      'Illustration. Each dot is a step your agent spends tokens on.',
     )
+    expect(text()).toContain('Save your tokens')
     expect(text()).toContain('Skills run in seconds')
-    expect(text()).toContain('Works in the right profile')
-    expect(text()).not.toContain('Fewer steps. Smaller AI bills.')
+    expect(text()).toContain('Multi-profile mode')
     expect(text()).not.toContain('Show me')
     expect(text()).toContain('$20a month')
     expect(text()).toContain('Cancel any time.')
@@ -633,6 +664,22 @@ describe('the ultrafast page', () => {
     expect(text()).toContain(
       'ultrafast on up to 5 computers, and long-term development of BrowserOS core features.',
     )
+  })
+
+  it('tests that Free shows the heading, the intro and all three features with their lines, and no Show me', async () => {
+    await mount()
+
+    const heading = features().querySelector('h2')
+    expect(heading?.textContent).toBe('What’s in ultrafast')
+    expect(heading?.getAttribute('class')).not.toContain('sr-only')
+    expect(heading?.nextElementSibling?.textContent).toBe(
+      'ultrafast is the new pro plan on BrowserOS, with three benefits.',
+    )
+    expect(featureLines()).toEqual(FEATURE_LINES)
+    expect(
+      [...features().querySelectorAll('mark')].map((mark) => mark.textContent),
+    ).toEqual(['NO tokens', 'personal profile'])
+    expect(features().textContent).not.toContain('Show me')
   })
 
   it('tests that Yearly shows the yearly price and what it works out to', async () => {
@@ -689,7 +736,14 @@ describe('the ultrafast page', () => {
     expect(button('Rename DESKTOP-4FQ7K2L')).toBeTruthy()
     expect(button('Cancel ultrafast')).toBeTruthy()
     expect(text()).toContain('What’s in ultrafast')
-    expect(text()).toContain('Fewer steps. Smaller AI bills.')
+    expect(featureLines()).toEqual(FEATURE_LINES)
+    for (const name of [
+      'Fewer steps',
+      'ultrafast skills',
+      'Browser profiles',
+    ]) {
+      expect(button(`Show me ${name}`)).toBeTruthy()
+    }
     expect(text()).toContain(
       'Next on Nov 27, 2026. Stripe emails you a receipt each time.',
     )
@@ -710,8 +764,8 @@ describe('the ultrafast page', () => {
     await click('Skip', dialog())
     expect(container.querySelector('[role="dialog"]')).toBeNull()
 
-    await click('Show me Right profile')
-    expect(dialog().textContent).toContain('Works in the right profile')
+    await click('Show me Browser profiles')
+    expect(dialog().textContent).toContain('Multi-profile mode')
     expect(button('Start using ultrafast', dialog())).toBeTruthy()
   })
 
@@ -812,7 +866,7 @@ describe('what ultrafast has saved', () => {
     expect(text()).not.toContain('Latest')
 
     await click('Show me how')
-    expect(dialog().getAttribute('aria-label')).toBe('ultrafast browsing')
+    expect(dialog().getAttribute('aria-label')).toBe('Fewer steps')
   })
 
   it('tests that without a meter yet the page keeps its empty state', async () => {
@@ -893,7 +947,7 @@ describe('buying ultrafast', () => {
     await click('Get ultrafast')
 
     expect(dialog().getAttribute('aria-label')).toBe('Welcome to ultrafast')
-    expect(dialog().textContent).toContain('Fewer steps. Smaller AI bills.')
+    expect(dialog().textContent).toContain('Save your tokens')
     expect(dialog().textContent).not.toContain('licence key')
     expect(events('pro_checkout_completed')).toHaveLength(1)
     expectNoKeyAnywhere()
@@ -901,7 +955,7 @@ describe('buying ultrafast', () => {
     await click('Next', dialog())
     expect(dialog().textContent).toContain('Skills run in seconds')
     await click('Next', dialog())
-    expect(dialog().textContent).toContain('Works in the right profile')
+    expect(dialog().textContent).toContain('Multi-profile mode')
 
     await click('Start using ultrafast', dialog())
     expect(container.querySelector('[role="dialog"]')).toBeNull()
