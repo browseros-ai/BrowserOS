@@ -161,6 +161,39 @@ fn dev_mode_installs_skills_only_into_agents_it_connected() -> anyhow::Result<()
 }
 
 #[test]
+fn dev_mode_keeps_its_skills_when_an_agent_config_is_unreadable() -> anyhow::Result<()> {
+    isolated(
+        "dev_mode_keeps_its_skills_when_an_agent_config_is_unreadable",
+        None,
+        |home| async move {
+            let codex_config = home.join(".codex/config.toml");
+            fs::create_dir_all(home.join(".codex"))?;
+            fs::write(&codex_config, "model = \"custom\"\n")?;
+            let service = dev_service(&home)?;
+            service
+                .connect_browseros(Harness::Codex, "http://127.0.0.1:9200/mcp")
+                .await?;
+            service
+                .install_skill(SkillSpec::new("neo-test", "dev only")?)
+                .await?;
+            let dev_skill = home.join(".agents/skills/neo-test/SKILL.md");
+
+            fs::write(&codex_config, "model = [\n")?;
+
+            assert!(service.connected_agents().await.is_err());
+            assert!(
+                service
+                    .install_skill(SkillSpec::new("neo-test", "dev edit")?)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(fs::read_to_string(&dev_skill)?, "dev only");
+            Ok(())
+        },
+    )
+}
+
+#[test]
 fn dev_mode_stops_installing_once_the_installed_app_reclaims_the_agent() -> anyhow::Result<()> {
     isolated(
         "dev_mode_stops_installing_once_the_installed_app_reclaims_the_agent",

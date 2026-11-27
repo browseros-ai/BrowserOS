@@ -922,14 +922,13 @@ fn self_connected_agents(
         };
         for (agent, link) in &server.links {
             let input = InspectEntryInput::new(&server.name, *agent).at_path(&link.config_path);
-            match manager.inspect_entry(input) {
-                Ok(Some(entry)) if browseros_mcp_url(&entry.spec) == Some(own_url) => {
-                    agents.insert(*agent);
-                }
-                Ok(_) => {}
-                Err(error) => {
-                    tracing::warn!(agent = %agent, %error, "BrowserOS MCP entry inspection failed");
-                }
+            // An unreadable config is not proof of a disconnect: dropping the agent here
+            // would let the next save remove the skills this build installed there.
+            if manager
+                .inspect_entry(input)?
+                .is_some_and(|entry| browseros_mcp_url(&entry.spec) == Some(own_url))
+            {
+                agents.insert(*agent);
             }
         }
     }
