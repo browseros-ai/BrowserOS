@@ -62,6 +62,52 @@ describe('renderSnapshot', () => {
     )
   })
 
+  test('renders boolean and string checked tristate values', () => {
+    const nodes: AXNode[] = [
+      ax('1', 'RootWebArea', { children: ['2', '3', '4', '5', '6'] }),
+      ax('2', 'checkbox', {
+        name: name('String checked'),
+        properties: [
+          { name: 'checked', value: { type: 'tristate', value: 'true' } },
+        ],
+      }),
+      ax('3', 'checkbox', {
+        name: name('String unchecked'),
+        properties: [
+          { name: 'checked', value: { type: 'tristate', value: 'false' } },
+        ],
+      }),
+      ax('4', 'checkbox', {
+        name: name('Mixed'),
+        properties: [
+          { name: 'checked', value: { type: 'tristate', value: 'mixed' } },
+        ],
+      }),
+      ax('5', 'checkbox', {
+        name: name('Boolean checked'),
+        properties: [
+          { name: 'checked', value: { type: 'boolean', value: true } },
+        ],
+      }),
+      ax('6', 'checkbox', {
+        name: name('Boolean unchecked'),
+        properties: [
+          { name: 'checked', value: { type: 'boolean', value: false } },
+        ],
+      }),
+    ]
+
+    expect(renderSnapshot(nodes, { refs: new RefMap() }).text).toBe(
+      [
+        '- checkbox "String checked" [checked]',
+        '- checkbox "String unchecked" [unchecked]',
+        '- checkbox "Mixed" [indeterminate]',
+        '- checkbox "Boolean checked" [checked]',
+        '- checkbox "Boolean unchecked" [unchecked]',
+      ].join('\n'),
+    )
+  })
+
   test('drops unnamed generic wrappers, lifting children to parent depth', () => {
     const nodes: AXNode[] = [
       ax('1', 'RootWebArea', { children: ['2'] }),
