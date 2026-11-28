@@ -169,7 +169,7 @@ describe('DbAcpAgentStore', () => {
         email, account_id, updated_at
       ) VALUES ('browseros-1', 'browseros', 'access', 'refresh', 1, NULL, NULL, 1)
     `)
-    legacySqlite.close()
+    legacySqlite.close(true)
 
     const handle = initializeDb({ dbPath, migrationsDir: sourceMigrations })
     expect(
