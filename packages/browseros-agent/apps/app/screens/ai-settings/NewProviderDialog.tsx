@@ -213,7 +213,7 @@ function isProviderTestable(input: {
     return Boolean(hasAccessKeyId && hasSecretAccessKey && input.region)
   }
   if (!input.baseUrl) return false
-  if (!['ollama', 'lmstudio'].includes(input.type) && !hasApiKey) {
+  if (!['ollama', 'lmstudio', 'rapid-mlx'].includes(input.type) && !hasApiKey) {
     return false
   }
   return true
@@ -863,9 +863,11 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
           control={form.control}
           name="apiKey"
           render={({ field }) => {
-            const isApiKeyOptional = ['ollama', 'lmstudio'].includes(
-              watchedType,
-            )
+            const isApiKeyOptional = [
+              'ollama',
+              'lmstudio',
+              'rapid-mlx',
+            ].includes(watchedType)
             return (
               <FormItem>
                 <FormLabel>

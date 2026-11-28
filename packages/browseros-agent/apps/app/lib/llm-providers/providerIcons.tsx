@@ -29,6 +29,7 @@ const providerIconMap: Record<ProviderType, IconComponent | null> = {
   azure: Azure,
   ollama: Ollama,
   lmstudio: LmStudio,
+  'rapid-mlx': null,
   bedrock: Bedrock,
   moonshot: Kimi,
   'chatgpt-pro': OpenAI,

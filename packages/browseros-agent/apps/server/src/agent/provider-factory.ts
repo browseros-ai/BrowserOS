@@ -207,6 +207,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.OPENROUTER]: createOpenRouterFactory,
   [LLM_PROVIDERS.AZURE]: createAzureFactory,
   [LLM_PROVIDERS.LMSTUDIO]: createLMStudioFactory,
+  [LLM_PROVIDERS.RAPID_MLX]: createOpenAICompatibleFactory,
   [LLM_PROVIDERS.OLLAMA]: createOllamaFactory,
   [LLM_PROVIDERS.BEDROCK]: createBedrockFactory,
   [LLM_PROVIDERS.OPENAI_COMPATIBLE]: createOpenAICompatibleFactory,
@@ -225,6 +226,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
 const OPENAI_COMPATIBLE_SERIALIZER_PROVIDERS: ReadonlySet<string> = new Set([
   LLM_PROVIDERS.OPENAI_COMPATIBLE,
   LLM_PROVIDERS.LMSTUDIO,
+  LLM_PROVIDERS.RAPID_MLX,
   LLM_PROVIDERS.OLLAMA,
   LLM_PROVIDERS.MOONSHOT,
   LLM_PROVIDERS.QWEN_CODE,

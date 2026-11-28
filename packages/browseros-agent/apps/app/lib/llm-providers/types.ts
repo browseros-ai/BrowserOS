@@ -8,6 +8,7 @@ export type ProviderType =
   | 'azure'
   | 'ollama'
   | 'lmstudio'
+  | 'rapid-mlx'
   | 'bedrock'
   | 'moonshot'
   | 'chatgpt-pro'

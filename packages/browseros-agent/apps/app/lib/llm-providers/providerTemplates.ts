@@ -125,6 +125,16 @@ export const providerTemplates: ProviderTemplate[] = [
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#openrouter',
   }),
+  {
+    id: 'rapid-mlx',
+    name: 'Rapid-MLX',
+    defaultBaseUrl: 'http://localhost:8000/v1',
+    defaultModelId: 'mlx-community/Qwen3.5-4B-MLX-4bit',
+    supportsImages: false,
+    contextWindow: 262144,
+    setupGuideUrl:
+      'https://docs.browseros.com/features/bring-your-own-llm#rapid-mlx',
+  },
   enrichTemplate('lmstudio', {
     defaultModelId: 'openai/gpt-oss-20b',
     defaultBaseUrl: 'http://localhost:1234/v1',
@@ -160,6 +170,7 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'azure', label: 'Azure' },
   { value: 'ollama', label: 'Ollama' },
   { value: 'lmstudio', label: 'LM Studio' },
+  { value: 'rapid-mlx', label: 'Rapid-MLX' },
   { value: 'bedrock', label: 'AWS Bedrock' },
 ]
 
@@ -190,6 +201,7 @@ const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   azure: '',
   ollama: 'http://localhost:11434/v1',
   lmstudio: 'http://localhost:1234/v1',
+  'rapid-mlx': 'http://localhost:8000/v1',
   bedrock: '',
 }
 

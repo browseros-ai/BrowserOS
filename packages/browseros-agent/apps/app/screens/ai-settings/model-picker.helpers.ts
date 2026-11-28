@@ -10,6 +10,7 @@ import type { ModelInfo } from './models'
 const USER_LOADED_MODEL_PROVIDERS: ReadonlySet<ProviderType> = new Set([
   'lmstudio',
   'ollama',
+  'rapid-mlx',
   'openai-compatible',
 ])
 
