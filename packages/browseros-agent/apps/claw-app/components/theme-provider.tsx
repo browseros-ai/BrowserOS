@@ -45,13 +45,21 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     getCachedBrowserScheme,
   )
 
+  // Bumps when prefers-color-scheme changes so resolveTheme re-reads the
+  // live media query even if browserScheme stays null (Mode Device).
+  const [, setMediaEpoch] = useState(0)
+
   // Ask the browser what its own chrome is set to. getPref is callback-
   // based, so the answer lands after first paint; caching it means the
   // next paint starts from the right class instead of guessing off the
-  // OS. There is no pref-change event, so re-read whenever the tab comes
-  // back into view — flipping Appearance in chrome://settings and
-  // returning to an open cockpit is exactly how someone tries gray mode.
+  // OS. There is no pref-change event. Re-read while the stored theme is
+  // system: on mount, when Match browser is selected, when this tab
+  // becomes visible, and when prefers-color-scheme changes. Switching
+  // Appearance Mode to Device flips the media query without a visibility
+  // event; syncing then clears a stale light/dark cache so we follow the OS.
   useEffect(() => {
+    if (theme !== 'system') return
+
     let cancelled = false
 
     const sync = () => {
@@ -59,37 +67,52 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
         if (cancelled) return
         setCachedBrowserScheme(scheme)
         setBrowserScheme(scheme)
+        setMediaEpoch((epoch) => epoch + 1)
+        const root = document.documentElement
+        root.classList.remove('light', 'dark')
+        root.classList.add(resolveTheme('system', scheme))
       })
     }
     const onVisibility = () => {
       if (document.visibilityState === 'visible') sync()
     }
+    const onMedia = () => {
+      sync()
+    }
+
+    const mediaDark = () =>
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-color-scheme: dark)').matches
+
+    let sawDark = mediaDark()
+    const watch = window.setInterval(() => {
+      const dark = mediaDark()
+      if (dark === sawDark) return
+      sawDark = dark
+      sync()
+    }, 200)
 
     sync()
     document.addEventListener('visibilitychange', onVisibility)
+    const mediaQuery =
+      typeof window.matchMedia === 'function'
+        ? window.matchMedia('(prefers-color-scheme: dark)')
+        : null
+    mediaQuery?.addEventListener('change', onMedia)
     return () => {
       cancelled = true
+      window.clearInterval(watch)
       document.removeEventListener('visibilitychange', onVisibility)
+      mediaQuery?.removeEventListener('change', onMedia)
     }
-  }, [])
+  }, [theme])
 
   const resolved = resolveTheme(theme, browserScheme)
 
   useEffect(() => {
     const root = document.documentElement
-
-    const apply = () => {
-      root.classList.remove('light', 'dark')
-      root.classList.add(resolveTheme(theme, browserScheme))
-    }
-    apply()
-
-    // Only follow the OS while nothing more specific is speaking: an
-    // explicit preference wins, and so does the browser's own scheme.
-    if (theme !== 'system' || browserScheme) return
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    mediaQuery.addEventListener('change', apply)
-    return () => mediaQuery.removeEventListener('change', apply)
+    root.classList.remove('light', 'dark')
+    root.classList.add(resolveTheme(theme, browserScheme))
   }, [theme, browserScheme])
 
   useEffect(() => {
