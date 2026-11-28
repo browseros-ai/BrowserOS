@@ -72,6 +72,7 @@ describe('loadServerConfig', () => {
       path.join(tempDir, 'execution'),
     )
     assert.strictEqual(result.value.mcpAllowRemote, true)
+    assert.strictEqual(result.value.host, '0.0.0.0')
     assert.strictEqual(result.value.instanceClientId, 'user-123')
     assert.strictEqual(result.value.instanceInstallId, 'install-456')
     assert.strictEqual(result.value.instanceBrowserosVersion, '1.0.0')
@@ -166,6 +167,30 @@ describe('loadServerConfig', () => {
     )
     assert.strictEqual(result.value.instanceClientId, 'client-123')
     assert.strictEqual(result.value.instanceInstallId, 'install-456')
+    assert.strictEqual(result.value.mcpAllowRemote, false)
+    assert.strictEqual(result.value.host, '127.0.0.1')
+  })
+
+  it('binds loopback unless remote MCP access is enabled', () => {
+    const local = loadServerConfig([
+      'bun',
+      'src/index.ts',
+      '--config',
+      writeSidecarConfig(),
+    ])
+    assert.strictEqual(local.ok, true)
+    if (!local.ok) return
+    assert.strictEqual(local.value.host, '127.0.0.1')
+
+    const remote = loadServerConfig([
+      'bun',
+      'src/index.ts',
+      '--config',
+      writeSidecarConfig({ flags: { allow_remote_in_mcp: true } }),
+    ])
+    assert.strictEqual(remote.ok, true)
+    if (!remote.ok) return
+    assert.strictEqual(remote.value.host, '0.0.0.0')
   })
 
   it('fails when required sidecar fields are missing', () => {
